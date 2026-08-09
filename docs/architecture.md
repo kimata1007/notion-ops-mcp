@@ -25,6 +25,10 @@ stdio MCP server
 - 認証層は PAT/OAuth の選択、refresh、保存を担い、ページ本文を受け取らない。
 - logger は Tool 名、状態、回数、retry、経過時間だけを stderr へ出す。
 
+入力 schema は二層に分ける。MCP SDK の `tools/list` にはトップレベル object として全公開 field・nested
+union を列挙し、モデルが入力契約を取得できるようにする。実行時は同じ object の cross-field 検証に加え、
+read/publish service 境界で strict union を再検証する。公開 schema と実行時 schema の両方をテストする。
+
 一回の外向き Tool Call に対して request scope を作り、上流呼び出し数、deadline、AbortSignal、retry 数を
 保持する。状態は呼び出し終了時に破棄し、クロスランキャッシュは持たない。重複防止は最新版の本文と
 要求操作を比較する call-local な判定で行う。

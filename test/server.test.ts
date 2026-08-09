@@ -24,25 +24,24 @@ describe("notion-ops MCP server", () => {
         wall_time_ms: 3,
       },
     }));
+    const publishDocument = vi.fn(async () => ({
+      status: "not_found" as const,
+      summary: {
+        operation: "publish" as const,
+        executed_operation: "append" as const,
+        operation_count: 1,
+        created: false,
+        auto_rebased: false,
+        verification: "not_run" as const,
+        upstream_tool_calls: 1,
+        retries: 0,
+        wall_time_ms: 2,
+      },
+    }));
     const server = createNotionOpsServer(
       {
         readDocument: { execute: readDocument },
-        publishDocument: {
-          execute: vi.fn(async () => ({
-            status: "not_found" as const,
-            summary: {
-              operation: "publish" as const,
-              executed_operation: "append" as const,
-              operation_count: 1,
-              created: false,
-              auto_rebased: false,
-              verification: "not_run" as const,
-              upstream_tool_calls: 1,
-              retries: 0,
-              wall_time_ms: 2,
-            },
-          })),
-        },
+        publishDocument: { execute: publishDocument },
       },
       new SafeLogger((line) => logs.push(line)),
     );
@@ -55,6 +54,31 @@ describe("notion-ops MCP server", () => {
       "notion_read_document",
       "notion_publish_document",
     ]);
+    const readSchema = listed.tools.find((tool) => tool.name === "notion_read_document")
+      ?.inputSchema as { properties?: Record<string, unknown> };
+    const publishSchema = listed.tools.find((tool) => tool.name === "notion_publish_document")
+      ?.inputSchema as { properties?: Record<string, unknown> };
+    expect(Object.keys(readSchema.properties ?? {})).toEqual(
+      expect.arrayContaining(["source", "sources", "max_output_bytes", "timeout_ms"]),
+    );
+    expect(Object.keys(publishSchema.properties ?? {})).toEqual(
+      expect.arrayContaining([
+        "target",
+        "markdown",
+        "pages",
+        "operation",
+        "operations",
+        "base_revision",
+        "conflict_policy",
+        "dry_run",
+        "timeout_ms",
+      ]),
+    );
+    expect(readSchema.properties?.["source"]).toMatchObject({ anyOf: expect.any(Array) });
+    expect(publishSchema.properties?.["target"]).toMatchObject({ anyOf: expect.any(Array) });
+    expect(publishSchema.properties?.["operation"]).toMatchObject({
+      anyOf: expect.any(Array),
+    });
 
     const result = await client.callTool({
       name: "notion_read_document",
@@ -71,7 +95,21 @@ describe("notion-ops MCP server", () => {
     ]);
     expect(result.structuredContent).toBeUndefined();
     expect(readDocument).toHaveBeenCalledOnce();
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).not.toContain("missing");
+
+    const published = await client.callTool({
+      name: "notion_publish_document",
+      arguments: {
+        target: {
+          type: "page_id",
+          page_id: "11111111-1111-4111-8111-111111111111",
+        },
+        operation: { type: "append", markdown: "requested" },
+      },
+    });
+    expect(published.isError).not.toBe(true);
+    expect(publishDocument).toHaveBeenCalledOnce();
+    expect(logs).toHaveLength(2);
+    expect(logs.join("\n")).not.toContain("missing");
+    expect(logs.join("\n")).not.toContain("requested");
   });
 });

@@ -5,7 +5,7 @@ import type { SafeLogger } from "./logger.js";
 import { PACKAGE_NAME, PACKAGE_VERSION } from "./package.js";
 import type { PublishDocumentResult, PublishDocumentService } from "./tools/publish-document.js";
 import type { ReadDocumentResult, ReadDocumentService } from "./tools/read-document.js";
-import { PublishDocumentInputSchema, ReadDocumentInputSchema } from "./tools/schemas.js";
+import { PublishDocumentToolInputSchema, ReadDocumentToolInputSchema } from "./tools/schemas.js";
 
 export interface NotionOpsServices {
   readDocument: Pick<ReadDocumentService, "execute">;
@@ -42,7 +42,7 @@ export function createNotionOpsServer(services: NotionOpsServices, logger?: Safe
       title: "Read Notion document",
       description:
         "Resolve and fetch one or up to eight Notion pages by ID, URL, or unambiguous search, returning Markdown and revisions in one operation.",
-      inputSchema: ReadDocumentInputSchema,
+      inputSchema: ReadDocumentToolInputSchema,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -63,7 +63,7 @@ export function createNotionOpsServer(services: NotionOpsServices, logger?: Safe
       title: "Publish Notion document",
       description:
         "Create one or more Notion documents, or conflict-safely apply one or more edits to a document with bounded rebasing and post-write verification.",
-      inputSchema: PublishDocumentInputSchema,
+      inputSchema: PublishDocumentToolInputSchema,
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,

@@ -42,6 +42,26 @@ export const ReadDocumentInputSchema = z.union([
   BatchReadDocumentInputSchema,
 ]);
 
+export const ReadDocumentToolInputSchema = z
+  .object({
+    source: ReadSourceSchema.optional().describe("One Notion document to read"),
+    sources: z
+      .array(ReadSourceSchema)
+      .min(1)
+      .max(MAX_BATCH_DOCUMENTS)
+      .optional()
+      .describe("One to eight Notion documents to read in input order"),
+    ...CommonReadOptions,
+  })
+  .strict()
+  .superRefine((input, context) => {
+    const parsed = ReadDocumentInputSchema.safeParse(input);
+    if (parsed.success) return;
+    for (const issue of parsed.error.issues) {
+      context.addIssue({ code: "custom", path: issue.path, message: issue.message });
+    }
+  });
+
 export type ReadDocumentInput = z.infer<typeof ReadDocumentInputSchema>;
 export type ReadSource = z.infer<typeof ReadSourceSchema>;
 
@@ -76,6 +96,13 @@ const CreateTargetSchema = z
     type: z.literal("create"),
     parent: ParentSchema,
     title: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+const CreatePageSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    markdown: MarkdownSchema,
   })
   .strict();
 
@@ -150,17 +177,7 @@ const CreateDocumentInputSchema = z
 const BatchCreateDocumentInputSchema = z
   .object({
     target: BatchCreateTargetSchema,
-    pages: z
-      .array(
-        z
-          .object({
-            title: z.string().trim().min(1).max(200),
-            markdown: MarkdownSchema,
-          })
-          .strict(),
-      )
-      .min(1)
-      .max(MAX_BATCH_DOCUMENTS),
+    pages: z.array(CreatePageSchema).min(1).max(MAX_BATCH_DOCUMENTS),
     ...CommonPublishOptions,
   })
   .strict()
@@ -197,6 +214,36 @@ export const PublishDocumentInputSchema = z.union([
   UpdateDocumentInputSchema,
   BatchUpdateDocumentInputSchema,
 ]);
+
+export const PublishDocumentToolInputSchema = z
+  .object({
+    target: z
+      .union([ExistingTargetSchema, CreateTargetSchema, BatchCreateTargetSchema])
+      .describe("Existing page, single-page creation, or batch creation target"),
+    markdown: MarkdownSchema.optional().describe("Markdown for single-page creation"),
+    pages: z
+      .array(CreatePageSchema)
+      .min(1)
+      .max(MAX_BATCH_DOCUMENTS)
+      .optional()
+      .describe("One to eight pages for a create_batch target"),
+    operation: PublishOperationSchema.optional().describe("One edit for an existing page"),
+    operations: PublishOperationsSchema.optional().describe(
+      "One to ten ordered edits for an existing page",
+    ),
+    base_revision: RevisionSchema.optional(),
+    conflict_policy: z.enum(["auto_rebase", "fail_on_change"]).optional(),
+    dry_run: z.boolean().optional(),
+    timeout_ms: z.number().int().positive().optional(),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    const parsed = PublishDocumentInputSchema.safeParse(input);
+    if (parsed.success) return;
+    for (const issue of parsed.error.issues) {
+      context.addIssue({ code: "custom", path: issue.path, message: issue.message });
+    }
+  });
 
 export type PublishDocumentInput = z.infer<typeof PublishDocumentInputSchema>;
 export type PublishOperation = z.infer<typeof PublishOperationSchema>;
