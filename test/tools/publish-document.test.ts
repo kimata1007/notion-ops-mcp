@@ -305,4 +305,19 @@ describe("notion_publish_document", () => {
     expect(result).toMatchObject({ status: "failed", reason: "invalid_input" });
     expect(fake.calls).toHaveLength(0);
   });
+
+  it("does not write when the upstream page snapshot is incomplete", async () => {
+    const fake = new FakeNotionMcp();
+    const page = fake.addPage({ title: "Large page", markdown: "partial" });
+    fake.truncatedPages.add(page.id);
+    const { publish } = services(fake);
+
+    const result = await publish.execute({
+      target: { type: "page_id", page_id: page.id },
+      operation: { type: "append", markdown: "unsafe" },
+    });
+
+    expect(result).toMatchObject({ status: "conflict", reason: "incomplete_page" });
+    expect(fake.calls.map((call) => call.name)).toEqual(["notion-fetch"]);
+  });
 });

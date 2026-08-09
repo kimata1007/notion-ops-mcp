@@ -33,6 +33,7 @@ type ConflictReason =
   | "same_region_changed"
   | "replace_document_changed"
   | "concurrent_change"
+  | "incomplete_page"
   | "verification_failed";
 
 interface PublishSummary {
@@ -272,6 +273,9 @@ export class PublishDocumentService {
     }
 
     let page = resolved.page;
+    if (page.upstreamTruncated) {
+      return this.#conflict("incomplete_page", input, context, page, false);
+    }
     const revision = currentRevision(page);
     const changed = input.base_revision ? revisionChanged(input.base_revision, revision) : false;
     let autoRebased = false;
@@ -343,6 +347,9 @@ export class PublishDocumentService {
         rebaseAttempts += 1;
         autoRebased = true;
         const refreshed = await this.#fetchPage(page.id, names, context);
+        if (refreshed.upstreamTruncated) {
+          return this.#conflict("incomplete_page", input, context, refreshed, true);
+        }
         const refreshedPlan = planEdit(refreshed.markdown, input.operation);
         if (refreshedPlan.state === "already_applied") {
           return this.#published(

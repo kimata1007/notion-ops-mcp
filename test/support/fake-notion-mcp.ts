@@ -42,6 +42,7 @@ function occurrences(haystack: string, needle: string): number {
 export class FakeNotionMcp {
   readonly pages = new Map<string, FakePage>();
   readonly calls: FakeCall[] = [];
+  readonly truncatedPages = new Set<string>();
   asyncWrites = false;
   beforeCall?: (call: FakeCall, fake: FakeNotionMcp) => void | Promise<void>;
   #clock = 0;
@@ -117,6 +118,7 @@ export class FakeNotionMcp {
           url: page.url,
           text: page.markdown,
           page: { id: page.id, last_edited_time: page.last_edited_time },
+          truncated: this.truncatedPages.has(page.id),
         });
       },
     );
