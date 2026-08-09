@@ -1,4 +1,6 @@
 export { OpsError } from "./errors.js";
+export { AuthManager } from "./auth/manager.js";
+export { FileCredentialStore } from "./auth/file-store.js";
 export { PACKAGE_NAME, PACKAGE_VERSION } from "./package.js";
 export { ReadDocumentService } from "./tools/read-document.js";
 export { PublishDocumentService } from "./tools/publish-document.js";

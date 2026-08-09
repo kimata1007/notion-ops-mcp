@@ -13,6 +13,7 @@ import type { JsonObject, UpstreamCallResult, UpstreamToolDefinition } from "./t
 
 export interface AccessTokenSource {
   getAccessToken(signal: AbortSignal): Promise<string | undefined>;
+  handleUnauthorized?(): Promise<void>;
 }
 
 export type UpstreamTransportFactory = (
@@ -105,13 +106,13 @@ export class McpUpstreamClient {
   ): Promise<UpstreamCallResult> {
     let attempt = 0;
     while (true) {
-      context.consumeToolCall();
       try {
         await this.connect(context);
         const client = this.#client;
         if (!client) throw new OpsError("failed", "upstream client is not connected");
         const remainingMs = context.remainingMs();
         if (remainingMs === 0) throw context.abortError();
+        context.consumeToolCall();
         const result = await client.callTool(
           { name, arguments: arguments_ },
           CallToolResultSchema,
@@ -128,6 +129,10 @@ export class McpUpstreamClient {
         return parseToolResult(parsedResult.data);
       } catch (error) {
         const normalized = normalizeThrownError(error, context.signal);
+        if (normalized.code === "auth_required") {
+          await this.#tokenSource.handleUnauthorized?.();
+          await this.close().catch(() => undefined);
+        }
         const retryableRead =
           kind === "read" &&
           normalized.retryable &&
@@ -174,7 +179,11 @@ export class McpUpstreamClient {
       this.#catalog = new UpstreamToolCatalog(listed.tools as UpstreamToolDefinition[]);
     } catch (error) {
       await client.close().catch(() => undefined);
-      throw normalizeThrownError(error, context.signal);
+      const normalized = normalizeThrownError(error, context.signal);
+      if (normalized.code === "auth_required") {
+        await this.#tokenSource.handleUnauthorized?.();
+      }
+      throw normalized;
     }
   }
 

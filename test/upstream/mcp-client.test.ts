@@ -46,6 +46,7 @@ describe("McpUpstreamClient", () => {
     await expect(client.catalog(context)).rejects.toMatchObject({
       code: "auth_required",
     } satisfies Partial<OpsError>);
+    expect(context.metrics.upstreamToolCalls).toBe(0);
     expect(fake.calls).toHaveLength(0);
   });
 });
