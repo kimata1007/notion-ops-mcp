@@ -107,4 +107,70 @@ describe("notion_read_document", () => {
     expect(result).toMatchObject({ status: "failed", reason: "invalid_input" });
     expect(fake.calls).toHaveLength(0);
   });
+
+  it("reads multiple explicit documents in one model-facing call", async () => {
+    const fake = new FakeNotionMcp();
+    const first = fake.addPage({ title: "First", markdown: "first body" });
+    const second = fake.addPage({ title: "Second", markdown: "second body" });
+
+    const result = await service(fake).execute({
+      sources: [
+        { type: "page_id", page_id: first.id },
+        { type: "url", url: second.url },
+      ],
+    });
+
+    expect(result.status).toBe("batch");
+    if (result.status !== "batch") throw new Error("expected batch result");
+    expect(result.results.map(({ result: item }) => item.status)).toEqual(["success", "success"]);
+    expect(result.summary).toMatchObject({
+      requested_count: 2,
+      success_count: 2,
+      upstream_tool_calls: 2,
+    });
+    expect(fake.calls.map((call) => call.name)).toEqual(["notion-fetch", "notion-fetch"]);
+  });
+
+  it("keeps batch order and reports ambiguous and missing items independently", async () => {
+    const fake = new FakeNotionMcp();
+    fake.addPage({ title: "Plan A", markdown: "A" });
+    fake.addPage({ title: "Plan B", markdown: "B" });
+
+    const result = await service(fake).execute({
+      sources: [
+        { type: "search", query: "Plan" },
+        { type: "search", query: "Missing" },
+      ],
+    });
+
+    expect(result.status).toBe("batch");
+    if (result.status !== "batch") throw new Error("expected batch result");
+    expect(result.results.map(({ result: item }) => item.status)).toEqual([
+      "ambiguous",
+      "not_found",
+    ]);
+    expect(result.summary).toMatchObject({ ambiguous_count: 1, not_found_count: 1 });
+  });
+
+  it("shares the total output budget fairly across a batch", async () => {
+    const fake = new FakeNotionMcp();
+    const first = fake.addPage({ title: "First", markdown: "文".repeat(400) });
+    const second = fake.addPage({ title: "Second", markdown: "字".repeat(400) });
+
+    const result = await service(fake).execute({
+      sources: [
+        { type: "page_id", page_id: first.id },
+        { type: "page_id", page_id: second.id },
+      ],
+      max_output_bytes: 1024,
+    });
+
+    if (result.status !== "batch") throw new Error("expected batch result");
+    const outputBytes = result.results.reduce(
+      (total, { result: item }) =>
+        total + (item.status === "success" ? Buffer.byteLength(item.page.markdown, "utf8") : 0),
+      0,
+    );
+    expect(outputBytes).toBeLessThanOrEqual(1024);
+  });
 });

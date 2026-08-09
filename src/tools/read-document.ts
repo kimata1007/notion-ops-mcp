@@ -1,4 +1,9 @@
-import { DEFAULT_OUTPUT_BYTES, DEFAULT_SEARCH_CANDIDATES } from "../constants.js";
+import {
+  BATCH_CONCURRENCY,
+  DEFAULT_OUTPUT_BYTES,
+  DEFAULT_SEARCH_CANDIDATES,
+  MAX_BATCH_READ_TOOL_CALLS,
+} from "../constants.js";
 import { createRevision, type Revision } from "../domain/revision.js";
 import { truncateUtf8 } from "../domain/utf8.js";
 import { isOpsError, OpsError } from "../errors.js";
@@ -10,7 +15,8 @@ import {
 } from "../notion/normalize.js";
 import { OperationContext } from "../upstream/context.js";
 import type { McpUpstreamClient } from "../upstream/mcp-client.js";
-import { ReadDocumentInputSchema, type ReadDocumentInput } from "./schemas.js";
+import type { UpstreamToolNames } from "../upstream/types.js";
+import { ReadDocumentInputSchema, type ReadDocumentInput, type ReadSource } from "./schemas.js";
 
 interface Summary {
   operation: "read";
@@ -20,7 +26,7 @@ interface Summary {
   target?: { id: string; url: string };
 }
 
-export type ReadDocumentResult =
+type ReadItemResult =
   | {
       status: "success";
       page: {
@@ -33,22 +39,65 @@ export type ReadDocumentResult =
         original_bytes: number;
       };
       revision: Revision & { last_edited_time_source: "page" | "snapshot" };
-      summary: Summary;
     }
-  | { status: "not_found"; summary: Summary }
+  | { status: "not_found" }
   | {
       status: "ambiguous";
       candidates: SearchCandidate[];
       candidate_count: number;
-      summary: Summary;
     }
   | {
       status: "auth_required" | "rate_limited" | "failed";
       reason: string;
       retry_after_ms?: number;
       authorization_url?: string;
-      summary: Summary;
     };
+
+export type SingleReadDocumentResult = ReadItemResult & { summary: Summary };
+
+export interface BatchReadDocumentResult {
+  status: "batch";
+  results: Array<{ source: ReadSource; result: ReadItemResult }>;
+  summary: Summary & {
+    requested_count: number;
+    success_count: number;
+    ambiguous_count: number;
+    not_found_count: number;
+    failed_count: number;
+  };
+}
+
+export type ReadDocumentResult = SingleReadDocumentResult | BatchReadDocumentResult;
+
+function isBatchInput(
+  input: ReadDocumentInput,
+): input is Extract<ReadDocumentInput, { sources: ReadSource[] }> {
+  return "sources" in input;
+}
+
+async function mapConcurrent<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  worker: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: Array<R | undefined> = new Array(values.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= values.length) return;
+      const value = values[index];
+      if (value === undefined) throw new OpsError("failed", "batch source disappeared");
+      results[index] = await worker(value, index);
+    }
+  });
+  await Promise.all(runners);
+  return results.map((result) => {
+    if (result === undefined) throw new OpsError("failed", "batch result disappeared");
+    return result;
+  });
+}
 
 export class ReadDocumentService {
   readonly #upstream: McpUpstreamClient;
@@ -59,68 +108,98 @@ export class ReadDocumentService {
 
   async execute(inputValue: unknown, signal?: AbortSignal): Promise<ReadDocumentResult> {
     const parsed = ReadDocumentInputSchema.safeParse(inputValue);
-    if (!parsed.success) {
-      return {
-        status: "failed",
-        reason: "invalid_input",
-        summary: this.#summary(new OperationContext("read", { timeoutMs: 1 })),
-      };
-    }
+    if (!parsed.success) return this.#invalidInput();
     const input = parsed.data;
     const context = new OperationContext("read", {
       ...(input.timeout_ms === undefined ? {} : { timeoutMs: input.timeout_ms }),
       ...(signal ? { signal } : {}),
+      ...(isBatchInput(input) ? { toolCallLimit: MAX_BATCH_READ_TOOL_CALLS } : {}),
     });
 
     try {
       const names = (await this.#upstream.catalog(context)).resolve({ requireWrite: false });
-      let target: { id: string; url?: string };
-      if (input.source.type === "search") {
-        const searched = await this.#upstream.callTool(
-          names.search,
-          { query: input.source.query },
-          "read",
-          context,
-        );
-        const candidates = normalizeSearchResult(searched.value, DEFAULT_SEARCH_CANDIDATES);
-        if (candidates.length === 0)
-          return { status: "not_found", summary: this.#summary(context) };
-        if (candidates.length > 1) {
-          return {
-            status: "ambiguous",
-            candidates,
-            candidate_count: candidates.length,
-            summary: this.#summary(context),
-          };
-        }
-        const candidate = candidates[0];
-        if (!candidate) throw new OpsError("failed", "resolved search candidate disappeared");
-        target = candidate;
-      } else if (input.source.type === "page_id") {
-        target = { id: input.source.page_id };
-      } else {
-        target = { id: input.source.url, url: input.source.url };
-      }
-
-      const fetched = await this.#upstream.callTool(
-        names.fetch,
-        { id: target.url ?? target.id },
-        "read",
+      if (isBatchInput(input)) return await this.#executeBatch(input, names, context);
+      const result = await this.#readSource(
+        input.source,
+        names,
         context,
+        input.max_output_bytes ?? DEFAULT_OUTPUT_BYTES,
       );
-      const page = normalizeFetchResult(fetched.value);
-      return this.#success(page, input, context);
+      return { ...result, summary: this.#summary(context, result) };
     } catch (error) {
-      return this.#failure(error, context);
+      return { ...this.#failureItem(error), summary: this.#summary(context) };
     }
   }
 
-  #success(
-    page: PageSnapshot,
-    input: ReadDocumentInput,
+  async #executeBatch(
+    input: Extract<ReadDocumentInput, { sources: ReadSource[] }>,
+    names: UpstreamToolNames,
     context: OperationContext,
-  ): ReadDocumentResult {
-    const limited = truncateUtf8(page.markdown, input.max_output_bytes ?? DEFAULT_OUTPUT_BYTES);
+  ): Promise<BatchReadDocumentResult> {
+    const totalOutputBytes = input.max_output_bytes ?? DEFAULT_OUTPUT_BYTES;
+    const perDocumentBytes = Math.max(1, Math.floor(totalOutputBytes / input.sources.length));
+    const results = await mapConcurrent(input.sources, BATCH_CONCURRENCY, async (source) => ({
+      source,
+      result: await this.#readSource(source, names, context, perDocumentBytes).catch((error) =>
+        this.#failureItem(error),
+      ),
+    }));
+    const statuses = results.map(({ result }) => result.status);
+    return {
+      status: "batch",
+      results,
+      summary: {
+        ...this.#summary(context),
+        requested_count: results.length,
+        success_count: statuses.filter((status) => status === "success").length,
+        ambiguous_count: statuses.filter((status) => status === "ambiguous").length,
+        not_found_count: statuses.filter((status) => status === "not_found").length,
+        failed_count: statuses.filter(
+          (status) => !["success", "ambiguous", "not_found"].includes(status),
+        ).length,
+      },
+    };
+  }
+
+  async #readSource(
+    source: ReadSource,
+    names: UpstreamToolNames,
+    context: OperationContext,
+    maxOutputBytes: number,
+  ): Promise<ReadItemResult> {
+    let target: { id: string; url?: string };
+    if (source.type === "search") {
+      const searched = await this.#upstream.callTool(
+        names.search,
+        { query: source.query },
+        "read",
+        context,
+      );
+      const candidates = normalizeSearchResult(searched.value, DEFAULT_SEARCH_CANDIDATES);
+      if (candidates.length === 0) return { status: "not_found" };
+      if (candidates.length > 1) {
+        return { status: "ambiguous", candidates, candidate_count: candidates.length };
+      }
+      const candidate = candidates[0];
+      if (!candidate) throw new OpsError("failed", "resolved search candidate disappeared");
+      target = candidate;
+    } else if (source.type === "page_id") {
+      target = { id: source.page_id };
+    } else {
+      target = { id: source.url, url: source.url };
+    }
+
+    const fetched = await this.#upstream.callTool(
+      names.fetch,
+      { id: target.url ?? target.id },
+      "read",
+      context,
+    );
+    return this.#success(normalizeFetchResult(fetched.value), maxOutputBytes);
+  }
+
+  #success(page: PageSnapshot, maxOutputBytes: number): ReadItemResult {
+    const limited = truncateUtf8(page.markdown, maxOutputBytes);
     const revision = createRevision(page.markdown, page.lastEditedTime);
     return {
       status: "success",
@@ -134,15 +213,12 @@ export class ReadDocumentService {
         original_bytes: limited.originalBytes,
       },
       revision: { ...revision, last_edited_time_source: page.lastEditedTimeSource },
-      summary: this.#summary(context, page),
     };
   }
 
-  #failure(error: unknown, context: OperationContext): ReadDocumentResult {
+  #failureItem(error: unknown): ReadItemResult {
     const normalized = isOpsError(error) ? error : new OpsError("failed", "read operation failed");
-    if (normalized.code === "not_found") {
-      return { status: "not_found", summary: this.#summary(context) };
-    }
+    if (normalized.code === "not_found") return { status: "not_found" };
     const status =
       normalized.code === "auth_required" || normalized.code === "rate_limited"
         ? normalized.code
@@ -153,11 +229,16 @@ export class ReadDocumentService {
       reason: normalized.code,
       ...(normalized.retryAfterMs === undefined ? {} : { retry_after_ms: normalized.retryAfterMs }),
       ...(typeof authorizationUrl === "string" ? { authorization_url: authorizationUrl } : {}),
-      summary: this.#summary(context),
     };
   }
 
-  #summary(context: OperationContext, page?: PageSnapshot): Summary {
+  #invalidInput(): SingleReadDocumentResult {
+    const context = new OperationContext("read", { timeoutMs: 1 });
+    return { status: "failed", reason: "invalid_input", summary: this.#summary(context) };
+  }
+
+  #summary(context: OperationContext, result?: ReadItemResult): Summary {
+    const page = result?.status === "success" ? result.page : undefined;
     return {
       operation: "read",
       upstream_tool_calls: context.metrics.upstreamToolCalls,

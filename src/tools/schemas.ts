@@ -1,25 +1,48 @@
 import { z } from "zod";
 
-import { DEFAULT_OUTPUT_BYTES, MAX_INPUT_MARKDOWN_BYTES } from "../constants.js";
+import {
+  DEFAULT_OUTPUT_BYTES,
+  MAX_BATCH_DOCUMENTS,
+  MAX_INPUT_MARKDOWN_BYTES,
+} from "../constants.js";
 import { RevisionSchema } from "../domain/revision.js";
 import { normalizeNotionPageUrl, normalizePageId } from "../notion/url.js";
 
 const PageIdSchema = z.string().trim().transform(normalizePageId);
 const NotionUrlSchema = z.string().trim().transform(normalizeNotionPageUrl);
 
-export const ReadDocumentInputSchema = z
+export const ReadSourceSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("page_id"), page_id: PageIdSchema }).strict(),
+  z.object({ type: z.literal("url"), url: NotionUrlSchema }).strict(),
+  z.object({ type: z.literal("search"), query: z.string().trim().min(1).max(500) }).strict(),
+]);
+
+const CommonReadOptions = {
+  max_output_bytes: z.number().int().min(1024).max(DEFAULT_OUTPUT_BYTES).optional(),
+  timeout_ms: z.number().int().positive().optional(),
+};
+
+const SingleReadDocumentInputSchema = z
   .object({
-    source: z.discriminatedUnion("type", [
-      z.object({ type: z.literal("page_id"), page_id: PageIdSchema }).strict(),
-      z.object({ type: z.literal("url"), url: NotionUrlSchema }).strict(),
-      z.object({ type: z.literal("search"), query: z.string().trim().min(1).max(500) }).strict(),
-    ]),
-    max_output_bytes: z.number().int().min(1024).max(DEFAULT_OUTPUT_BYTES).optional(),
-    timeout_ms: z.number().int().positive().optional(),
+    source: ReadSourceSchema,
+    ...CommonReadOptions,
   })
   .strict();
 
+const BatchReadDocumentInputSchema = z
+  .object({
+    sources: z.array(ReadSourceSchema).min(1).max(MAX_BATCH_DOCUMENTS),
+    ...CommonReadOptions,
+  })
+  .strict();
+
+export const ReadDocumentInputSchema = z.union([
+  SingleReadDocumentInputSchema,
+  BatchReadDocumentInputSchema,
+]);
+
 export type ReadDocumentInput = z.infer<typeof ReadDocumentInputSchema>;
+export type ReadSource = z.infer<typeof ReadSourceSchema>;
 
 export const MarkdownSchema = z
   .string()

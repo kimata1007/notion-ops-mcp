@@ -1,4 +1,6 @@
 import {
+  MAX_BATCH_PUBLISH_TOOL_CALLS,
+  MAX_BATCH_READ_TOOL_CALLS,
   DEFAULT_REQUEST_TIMEOUT_MS,
   MAX_PUBLISH_TOOL_CALLS,
   MAX_READ_TOOL_CALLS,
@@ -24,7 +26,12 @@ export class OperationContext {
 
   constructor(
     kind: OperationKind,
-    options: { timeoutMs?: number; signal?: AbortSignal; now?: number } = {},
+    options: {
+      timeoutMs?: number;
+      signal?: AbortSignal;
+      now?: number;
+      toolCallLimit?: number;
+    } = {},
   ) {
     const now = options.now ?? Date.now();
     const requestedTimeout = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
@@ -36,7 +43,18 @@ export class OperationContext {
     this.signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
     this.kind = kind;
     this.deadlineAt = now + timeoutMs;
-    this.#toolCallLimit = kind === "read" ? MAX_READ_TOOL_CALLS : MAX_PUBLISH_TOOL_CALLS;
+    const defaultToolCallLimit = kind === "read" ? MAX_READ_TOOL_CALLS : MAX_PUBLISH_TOOL_CALLS;
+    const maximumToolCallLimit =
+      kind === "read" ? MAX_BATCH_READ_TOOL_CALLS : MAX_BATCH_PUBLISH_TOOL_CALLS;
+    const requestedToolCallLimit = options.toolCallLimit ?? defaultToolCallLimit;
+    if (
+      !Number.isSafeInteger(requestedToolCallLimit) ||
+      requestedToolCallLimit <= 0 ||
+      requestedToolCallLimit > maximumToolCallLimit
+    ) {
+      throw new OpsError("failed", "toolCallLimit is outside the allowed range");
+    }
+    this.#toolCallLimit = requestedToolCallLimit;
     this.metrics = { kind, upstreamToolCalls: 0, retries: 0, startedAt: now };
   }
 
