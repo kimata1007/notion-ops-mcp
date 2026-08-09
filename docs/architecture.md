@@ -31,7 +31,7 @@ stdio MCP server
 
 ## 上流互換性
 
-2026-08-09 時点の公式資料で使用する Tool は次のとおりである。
+2026-08-10 時点の公式資料で使用する Tool は次のとおりである。
 
 | 用途 | 公式 Tool | 主な入力 |
 | --- | --- | --- |
@@ -54,7 +54,8 @@ OpenAI MCP クライアントでは search/fetch の prefix が省略される�
 Tool 入力で timeout と返却本文上限を下方調整できるが、コード上の hard ceiling を超えられない。
 
 - 外向き request deadline: 30 秒（hard ceiling 120 秒）
-- 上流 Tool Call: read 4 回、publish 10 回
+- 上流 Tool Call: 単一 read 4 回、単一 publish 10 回、batch read 24 回、batch publish 30 回
+- バッチ幅: read 8文書、create 8ページ、同一ページ publish 10操作、上流並列度3
 - 検索候補: 10 件
 - 返却本文: UTF-8 64 KiB
 - 入力 Markdown: UTF-8 1 MiB

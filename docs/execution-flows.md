@@ -8,17 +8,22 @@
 4. 一件だけ fetch して本文 SHA-256 と `last_edited_time` から revision を作る。
 5. byte 上限を適用し、メタデータと計測値だけを返す。
 
+`sources` 指定時は最大8件を上限3並列で処理する。上流接続と Tool catalog、deadline、call budget は
+バッチ全体で共有し、結果順は入力順を保つ。
+
 従来 `model -> search -> model -> fetch -> model` の二回のモデル往復を、
 `model -> notion_read_document(search + fetch) -> model` の一回に畳み込む。
 
 ## Publish
 
 1. 対象を確定する。検索の 0/複数候補には書き込まない。
-2. 新規作成は dry-run でなければ一回だけ create し、fetch で検証する。
+2. 新規作成は dry-run でなければ一回だけ create し、fetch で検証する。複数作成も一回の create にまとめ、
+   各ページの検証だけを上限3並列にする。
 3. 既存更新は書き込み直前に fetch し、revision と操作対象の一意性を検査する。
 4. 要求内容と最新版を比較し、内容が一度だけ反映済みなら `already_applied` と判定する。
 5. 決定的な予定本文と、上流の対象限定 command を作る。
-6. 書き込みは一回だけ行う。不明な transport failure は再送せず fetch して適用済みか判定する。
+6. 単一操作または独立した対象限定操作群を一回で書く。依存する複数操作は指定順に書く。不明な
+   transport failure は再送せず fetch して適用済みか判定する。
 7. fetch した最新版で要求が一度だけ反映され、書き込み前の非対象部分が保持されたことを検証する。
 
 従来 `model -> resolve -> model -> fetch -> model -> write -> model -> verify -> model` を、

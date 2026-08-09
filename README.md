@@ -44,6 +44,8 @@ NOTION_TOKEN="your-token" npx -y notion-ops-mcp
 
 PAT 設定時は OAuth を開始しません。未認証の通常 Tool Call は `auth_required` と `authorization_url` を構造化結果として返します。URL をブラウザで開いて認可を完了し、元の Tool Call を再実行してください。ブラウザの自動起動や端末上の対話入力は行いません。
 
+stdio サーバー起動時に PAT または保存済み OAuth 資格情報がすでにある場合は、上流接続と Tool catalog をバックグラウンドで準備します。資格情報がない場合、このウォームアップは上流へ接続せず、OAuth も開始しません。
+
 OAuth 資格情報は所有者だけが読めるファイルへ原子的に保存し、期限の5分前から refresh します。refresh token rotation に対応し、`invalid_grant` や上流 401 では保存資格情報を破棄して再認証を要求します。詳しくは [認証フロー](docs/authentication.md) を参照してください。
 
 ## Tool
@@ -69,6 +71,18 @@ OAuth 資格情報は所有者だけが読めるファイルへ原子的に保�
 - `{ "type": "search", "query": "..." }`
 
 成功時の revision は `last_edited_time` と本文の SHA-256 を含み、本文そのものは含みません。返却本文は既定64 KiBまでで、切り詰め時は `truncated` と `original_bytes` を返します。
+
+最大8文書をまとめて読む場合は、`source` の代わりに `sources` を指定します。結果順は入力順を保ち、文書ごとの成功・失敗と集計を一度に返します。`max_output_bytes` はバッチ全体の上限です。
+
+```json
+{
+  "sources": [
+    { "type": "page_id", "page_id": "..." },
+    { "type": "search", "query": "運用 Runbook" }
+  ],
+  "max_output_bytes": 65536
+}
+```
 
 ### `notion_publish_document`
 
@@ -101,6 +115,34 @@ OAuth 資格情報は所有者だけが読めるファイルへ原子的に保�
   },
   "markdown": "# Release plan\n\nShip safely.",
   "dry_run": true
+}
+```
+
+同じ既存ページへ最大10操作を順番に適用する場合は `operation` の代わりに `operations` を指定します。互いに独立した対象限定編集は一回の上流更新へまとめ、前の編集結果に依存する操作は指定順に実行します。競合結果の `operation_index` は0始まりです。
+
+```json
+{
+  "target": { "type": "page_id", "page_id": "..." },
+  "operations": [
+    { "type": "replace_text", "old_text": "Draft", "new_text": "Approved" },
+    { "type": "append", "markdown": "## Decision\n\nApproved" }
+  ],
+  "conflict_policy": "auto_rebase"
+}
+```
+
+同じ親の下へ最大8ページを一回の上流作成要求で作る場合は `create_batch` を使います。作成自体は再送せず、各ページを取得して検証します。
+
+```json
+{
+  "target": {
+    "type": "create_batch",
+    "parent": { "type": "page_id", "page_id": "..." }
+  },
+  "pages": [
+    { "title": "Plan A", "markdown": "# Plan A" },
+    { "title": "Plan B", "markdown": "# Plan B" }
+  ]
 }
 ```
 
@@ -138,7 +180,9 @@ model -> notion_read_document(search + fetch) -> model
 - 曖昧な検索結果へ書き込まない
 - 読み取りだけを最大2回再試行し、書き込みは盲目的に再送しない
 - 書き込み直前の最新版を使い、書き込み後も再取得して検証する
-- request timeout は既定30秒・最大120秒、Tool Call 数は read 4回・publish 10回
+- request timeout は既定30秒・最大120秒
+- 単一処理の上流 Tool Call 数は read 4回・publish 10回、バッチ処理は read 最大24回・publish 最大30回
+- 一回の入力は read 最大8文書、create 最大8ページ、同一ページ更新は最大10操作
 - 入力 Markdown は最大1 MiB、返却本文は最大64 KiB、検索候補は最大10件
 - Notion ページ URL は許可 origin、HTTPS、ページ ID を検証する
 - Token、Authorization header、検索 query、Markdown/本文をログへ出さない

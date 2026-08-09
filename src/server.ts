@@ -41,7 +41,7 @@ export function createNotionOpsServer(services: NotionOpsServices, logger?: Safe
     {
       title: "Read Notion document",
       description:
-        "Resolve one Notion page by ID, URL, or an unambiguous search, then fetch its Markdown and revision in one operation.",
+        "Resolve and fetch one or up to eight Notion pages by ID, URL, or unambiguous search, returning Markdown and revisions in one operation.",
       inputSchema: ReadDocumentInputSchema,
       annotations: {
         readOnlyHint: true,
@@ -62,7 +62,7 @@ export function createNotionOpsServer(services: NotionOpsServices, logger?: Safe
     {
       title: "Publish Notion document",
       description:
-        "Create or conflict-safely update a Notion document, including target resolution, bounded rebasing, and post-write verification.",
+        "Create one or more Notion documents, or conflict-safely apply one or more edits to a document with bounded rebasing and post-write verification.",
       inputSchema: PublishDocumentInputSchema,
       annotations: {
         readOnlyHint: false,

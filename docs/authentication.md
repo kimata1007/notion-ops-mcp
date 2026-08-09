@@ -6,6 +6,10 @@
 2. OS 標準設定ディレクトリに保存された OAuth access/refresh token。
 3. 未認証なら OAuth Authorization Code + PKCE を開始し、`auth_required` と URL を Tool 結果で返す。
 
+stdio 接続後、既存の PAT または保存済み資格情報だけを確認し、利用可能なら上流 MCP 接続と
+`tools/list` をバックグラウンドでウォームアップする。この確認経路は資格情報がない場合に OAuth を
+開始しないため、未認証の起動時間や認証状態を変えない。
+
 環境変数の値、Authorization header、access/refresh token、client secret、PKCE verifier はログ、例外、
 stdout、Tool 結果へ含めない。
 
