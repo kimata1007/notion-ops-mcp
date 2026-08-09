@@ -1,0 +1,51 @@
+{
+  "name": "notion-ops-mcp",
+  "version": "0.1.0",
+  "description": "High-level, conflict-aware Notion operations over the official hosted Notion MCP",
+  "type": "module",
+  "bin": {
+    "notion-ops-mcp": "dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "notion",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kimata1007/notion-ops-mcp.git"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.1.12"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.5",
+    "@types/node": "24.7.2",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}
