@@ -38,7 +38,12 @@ function errorFromPayload(payload: unknown): OpsError {
       ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
     });
   }
-  return new OpsError("failed", "upstream tool call failed");
+  if (status === 404 || code === "object_not_found") {
+    return new OpsError("not_found", "upstream object was not found");
+  }
+  return new OpsError("failed", "upstream tool call failed", {
+    ...(code ? { details: { upstreamCode: code } } : {}),
+  });
 }
 
 export function parseToolResult(result: CallToolResult): UpstreamCallResult {
