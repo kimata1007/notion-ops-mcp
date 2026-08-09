@@ -4,6 +4,7 @@ import {
   DEFAULT_OUTPUT_BYTES,
   MAX_BATCH_DOCUMENTS,
   MAX_INPUT_MARKDOWN_BYTES,
+  MAX_PUBLISH_OPERATIONS,
 } from "../constants.js";
 import { RevisionSchema } from "../domain/revision.js";
 import { normalizeNotionPageUrl, normalizePageId } from "../notion/url.js";
@@ -78,6 +79,13 @@ const CreateTargetSchema = z
   })
   .strict();
 
+const BatchCreateTargetSchema = z
+  .object({
+    type: z.literal("create_batch"),
+    parent: ParentSchema,
+  })
+  .strict();
+
 export const AnchorSchema = z
   .object({
     kind: z.enum(["heading", "context"]),
@@ -110,6 +118,22 @@ export const PublishOperationSchema = z.discriminatedUnion("type", [
     .strict(),
 ]);
 
+const PublishOperationsSchema = z
+  .array(PublishOperationSchema)
+  .min(1)
+  .max(MAX_PUBLISH_OPERATIONS)
+  .superRefine((operations, context) => {
+    if (
+      operations.length > 1 &&
+      operations.some((operation) => operation.type === "replace_document")
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "replace_document must be the only operation",
+      });
+    }
+  });
+
 const CommonPublishOptions = {
   dry_run: z.boolean().optional().default(false),
   timeout_ms: z.number().int().positive().optional(),
@@ -123,6 +147,30 @@ const CreateDocumentInputSchema = z
   })
   .strict();
 
+const BatchCreateDocumentInputSchema = z
+  .object({
+    target: BatchCreateTargetSchema,
+    pages: z
+      .array(
+        z
+          .object({
+            title: z.string().trim().min(1).max(200),
+            markdown: MarkdownSchema,
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(MAX_BATCH_DOCUMENTS),
+    ...CommonPublishOptions,
+  })
+  .strict()
+  .refine(
+    (input) =>
+      input.pages.reduce((total, page) => total + Buffer.byteLength(page.markdown, "utf8"), 0) <=
+      MAX_INPUT_MARKDOWN_BYTES,
+    `Combined Markdown must be at most ${MAX_INPUT_MARKDOWN_BYTES} UTF-8 bytes`,
+  );
+
 const UpdateDocumentInputSchema = z
   .object({
     target: ExistingTargetSchema,
@@ -133,9 +181,21 @@ const UpdateDocumentInputSchema = z
   })
   .strict();
 
+const BatchUpdateDocumentInputSchema = z
+  .object({
+    target: ExistingTargetSchema,
+    operations: PublishOperationsSchema,
+    base_revision: RevisionSchema.optional(),
+    conflict_policy: z.enum(["auto_rebase", "fail_on_change"]).optional().default("fail_on_change"),
+    ...CommonPublishOptions,
+  })
+  .strict();
+
 export const PublishDocumentInputSchema = z.union([
   CreateDocumentInputSchema,
+  BatchCreateDocumentInputSchema,
   UpdateDocumentInputSchema,
+  BatchUpdateDocumentInputSchema,
 ]);
 
 export type PublishDocumentInput = z.infer<typeof PublishDocumentInputSchema>;

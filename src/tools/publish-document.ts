@@ -1,12 +1,22 @@
 import { Buffer } from "node:buffer";
 
-import { MAX_REBASE_ATTEMPTS } from "../constants.js";
+import {
+  BATCH_CONCURRENCY,
+  MAX_BATCH_PUBLISH_TOOL_CALLS,
+  MAX_REBASE_ATTEMPTS,
+} from "../constants.js";
 import {
   planEdit,
   verifyEdit,
   type ConflictReason as EditConflictReason,
   type EditPlan,
 } from "../domain/edit.js";
+import {
+  planEditSequence,
+  sequenceCommands,
+  verifyEditSequence,
+  type EditSequencePlan,
+} from "../domain/edit-sequence.js";
 import { contentEqual, createRevision, type Revision } from "../domain/revision.js";
 import { isOpsError, OpsError } from "../errors.js";
 import {
@@ -27,6 +37,8 @@ import {
 
 const ASYNC_MARKDOWN_THRESHOLD_BYTES = 128 * 1024;
 
+type ExecutedOperation = PublishOperation["type"] | "create" | "batch" | "create_batch";
+
 type ConflictReason =
   | EditConflictReason
   | "base_revision_changed"
@@ -38,7 +50,8 @@ type ConflictReason =
 
 interface PublishSummary {
   operation: "publish";
-  executed_operation: PublishOperation["type"] | "create";
+  executed_operation: ExecutedOperation;
+  operation_count: number;
   created: boolean;
   auto_rebased: boolean;
   verification: "verified" | "not_run" | "failed";
@@ -53,7 +66,8 @@ interface PublishedResult {
   page_id: string;
   url: string;
   created: boolean;
-  operation: PublishOperation["type"] | "create";
+  operation: ExecutedOperation;
+  operations?: PublishOperation["type"][];
   auto_rebased: boolean;
   verification: "verified";
   revision: Revision;
@@ -63,10 +77,35 @@ interface PublishedResult {
 export type PublishDocumentResult =
   | PublishedResult
   | {
+      status: "success" | "partial";
+      pages: Array<
+        | {
+            status: "verified";
+            page_id: string;
+            url: string;
+            title: string;
+            revision: Revision;
+          }
+        | {
+            status: "verification_failed";
+            page_id: string;
+            url?: string;
+            title: string;
+            reason: string;
+          }
+      >;
+      created_count: number;
+      verified_count: number;
+      operation: "create_batch";
+      summary: PublishSummary;
+    }
+  | {
       status: "dry_run";
       plan: {
-        operation: PublishOperation["type"] | "create";
-        target: { id?: string; url?: string; title?: string; parent?: JsonObject };
+        operation: ExecutedOperation;
+        target?: { id?: string; url?: string; title?: string; parent?: JsonObject };
+        targets?: Array<{ title: string; parent: JsonObject }>;
+        operations?: PublishOperation["type"][];
         added_bytes: number;
         removed_bytes: number;
         current_revision?: Revision;
@@ -80,7 +119,12 @@ export type PublishDocumentResult =
       candidate_count: number;
       summary: PublishSummary;
     }
-  | { status: "conflict"; reason: ConflictReason; summary: PublishSummary }
+  | {
+      status: "conflict";
+      reason: ConflictReason;
+      operation_index?: number;
+      summary: PublishSummary;
+    }
   | {
       status: "auth_required" | "rate_limited" | "failed";
       reason: string;
@@ -89,28 +133,56 @@ export type PublishDocumentResult =
       summary: PublishSummary;
     };
 
+type CreateInput = Extract<PublishDocumentInput, { markdown: string }>;
+type BatchCreateInput = Extract<PublishDocumentInput, { pages: unknown[] }>;
 type UpdateInput = Extract<PublishDocumentInput, { operation: PublishOperation }>;
+type BatchUpdateInput = Extract<PublishDocumentInput, { operations: PublishOperation[] }>;
+type ExistingInput = UpdateInput | BatchUpdateInput;
 
 type ResolvedTarget =
   | { state: "page"; page: PageSnapshot }
   | { state: "not_found" }
   | { state: "ambiguous"; candidates: SearchCandidate[] };
 
-function isCreateInput(
-  input: PublishDocumentInput,
-): input is Extract<PublishDocumentInput, { markdown: string }> {
+function isCreateInput(input: PublishDocumentInput): input is CreateInput {
   return input.target.type === "create" && "markdown" in input;
+}
+
+function isBatchCreateInput(input: PublishDocumentInput): input is BatchCreateInput {
+  return input.target.type === "create_batch" && "pages" in input;
+}
+
+function isBatchUpdateInput(input: PublishDocumentInput): input is BatchUpdateInput {
+  return "operations" in input;
+}
+
+function operationLabel(input: PublishDocumentInput): ExecutedOperation {
+  if (isCreateInput(input)) return "create";
+  if (isBatchCreateInput(input)) return "create_batch";
+  return isBatchUpdateInput(input) ? "batch" : input.operation.type;
+}
+
+function operationCount(input: PublishDocumentInput): number {
+  if (isBatchCreateInput(input)) return input.pages.length;
+  if (isBatchUpdateInput(input)) return input.operations.length;
+  return 1;
 }
 
 function payloadBytes(input: PublishDocumentInput): number {
   if (isCreateInput(input)) return Buffer.byteLength(input.markdown, "utf8");
-  const operation = input.operation;
-  switch (operation.type) {
-    case "replace_text":
-      return Buffer.byteLength(operation.new_text, "utf8");
-    default:
-      return Buffer.byteLength(operation.markdown, "utf8");
+  if (isBatchCreateInput(input)) {
+    return input.pages.reduce((total, page) => total + Buffer.byteLength(page.markdown, "utf8"), 0);
   }
+  const operations = isBatchUpdateInput(input) ? input.operations : [input.operation];
+  return operations.reduce(
+    (total, operation) =>
+      total +
+      Buffer.byteLength(
+        operation.type === "replace_text" ? operation.new_text : operation.markdown,
+        "utf8",
+      ),
+    0,
+  );
 }
 
 function currentRevision(page: PageSnapshot): Revision {
@@ -163,6 +235,25 @@ async function abortableDelay(milliseconds: number, signal: AbortSignal): Promis
   });
 }
 
+async function mapConcurrent<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  worker: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const runners = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const value = values[index];
+      if (value !== undefined) results[index] = await worker(value, index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
 export class PublishDocumentService {
   readonly #upstream: McpUpstreamClient;
 
@@ -174,23 +265,32 @@ export class PublishDocumentService {
     const parsed = PublishDocumentInputSchema.safeParse(inputValue);
     if (!parsed.success) return this.#invalidInput();
     const input = parsed.data;
+    const batch = isBatchCreateInput(input) || isBatchUpdateInput(input);
     const context = new OperationContext("write", {
       ...(input.timeout_ms === undefined ? {} : { timeoutMs: input.timeout_ms }),
       ...(signal ? { signal } : {}),
+      ...(batch ? { toolCallLimit: MAX_BATCH_PUBLISH_TOOL_CALLS } : {}),
     });
     const wantsAsync = payloadBytes(input) >= ASYNC_MARKDOWN_THRESHOLD_BYTES;
 
     try {
       if (isCreateInput(input) && input.dry_run) return this.#dryRunCreate(input, context);
+      if (isBatchCreateInput(input) && input.dry_run) {
+        return this.#dryRunBatchCreate(input, context);
+      }
       const names = (await this.#upstream.catalog(context)).resolve({
         requireWrite: true,
         requireAsync: wantsAsync,
       });
-      return isCreateInput(input)
-        ? await this.#create(input, names, context, wantsAsync)
+      if (isCreateInput(input)) return await this.#create(input, names, context, wantsAsync);
+      if (isBatchCreateInput(input)) {
+        return await this.#createBatch(input, names, context, wantsAsync);
+      }
+      return isBatchUpdateInput(input)
+        ? await this.#updateBatch(input, names, context, wantsAsync)
         : await this.#update(input, names, context, wantsAsync);
     } catch (error) {
-      return this.#failure(error, context, isCreateInput(input) ? "create" : input.operation.type);
+      return this.#failure(error, context, operationLabel(input), operationCount(input));
     }
   }
 
@@ -208,6 +308,28 @@ export class PublishDocumentService {
         removed_bytes: 0,
       },
       summary: this.#summary(context, "create", true, false, "not_run"),
+    };
+  }
+
+  #dryRunBatchCreate(input: BatchCreateInput, context: OperationContext): PublishDocumentResult {
+    const parent = this.#parentArguments(input.target.parent);
+    return {
+      status: "dry_run",
+      plan: {
+        operation: "create_batch",
+        targets: input.pages.map((page) => ({ title: page.title, parent })),
+        added_bytes: payloadBytes(input),
+        removed_bytes: 0,
+      },
+      summary: this.#summary(
+        context,
+        "create_batch",
+        true,
+        false,
+        "not_run",
+        undefined,
+        input.pages.length,
+      ),
     };
   }
 
@@ -248,6 +370,90 @@ export class PublishDocumentService {
       };
     }
     return this.#published("success", page, "create", true, false, context);
+  }
+
+  async #createBatch(
+    input: BatchCreateInput,
+    names: UpstreamToolNames,
+    context: OperationContext,
+    wantsAsync: boolean,
+  ): Promise<PublishDocumentResult> {
+    const createdResult = await this.#upstream.callTool(
+      names.createPages,
+      {
+        parent: this.#parentArguments(input.target.parent),
+        pages: input.pages.map((page) => ({
+          properties: { title: page.title },
+          content: page.markdown,
+        })),
+        ...(wantsAsync ? { allow_async: true } : {}),
+      },
+      "write",
+      context,
+    );
+    const completed = await this.#awaitAsync(createdResult.value, names, context);
+    const references = this.#createdReferences(completed);
+    if (references.length !== input.pages.length) {
+      throw new OpsError(
+        "upstream_incompatible",
+        "batch create result does not match the requested page count",
+      );
+    }
+
+    const pages = await mapConcurrent(references, BATCH_CONCURRENCY, async (reference, index) => {
+      const requested = input.pages[index];
+      if (!requested) {
+        throw new OpsError("upstream_incompatible", "batch create result order is invalid");
+      }
+      try {
+        const page = await this.#fetchPage(reference.url ?? reference.id, names, context);
+        if (
+          page.upstreamTruncated ||
+          page.title !== requested.title ||
+          page.markdown !== requested.markdown
+        ) {
+          return {
+            status: "verification_failed" as const,
+            page_id: reference.id,
+            ...(reference.url ? { url: reference.url } : {}),
+            title: requested.title,
+            reason: "content_mismatch",
+          };
+        }
+        return {
+          status: "verified" as const,
+          page_id: page.id,
+          url: page.url,
+          title: page.title,
+          revision: currentRevision(page),
+        };
+      } catch (error) {
+        return {
+          status: "verification_failed" as const,
+          page_id: reference.id,
+          ...(reference.url ? { url: reference.url } : {}),
+          title: requested.title,
+          reason: isOpsError(error) ? error.code : "verification_failed",
+        };
+      }
+    });
+    const verifiedCount = pages.filter((page) => page.status === "verified").length;
+    return {
+      status: verifiedCount === pages.length ? "success" : "partial",
+      pages,
+      created_count: references.length,
+      verified_count: verifiedCount,
+      operation: "create_batch",
+      summary: this.#summary(
+        context,
+        "create_batch",
+        true,
+        false,
+        verifiedCount === pages.length ? "verified" : "failed",
+        undefined,
+        input.pages.length,
+      ),
+    };
   }
 
   async #update(
@@ -379,6 +585,253 @@ export class PublishDocumentService {
     return this.#published("success", verified, input.operation.type, false, autoRebased, context);
   }
 
+  async #updateBatch(
+    input: BatchUpdateInput,
+    names: UpstreamToolNames,
+    context: OperationContext,
+    wantsAsync: boolean,
+  ): Promise<PublishDocumentResult> {
+    const resolved = await this.#resolveTarget(input, names, context);
+    if (resolved.state === "not_found") {
+      return {
+        status: "not_found",
+        summary: this.#summary(
+          context,
+          "batch",
+          false,
+          false,
+          "not_run",
+          undefined,
+          input.operations.length,
+        ),
+      };
+    }
+    if (resolved.state === "ambiguous") {
+      return {
+        status: "ambiguous",
+        candidates: resolved.candidates,
+        candidate_count: resolved.candidates.length,
+        summary: this.#summary(
+          context,
+          "batch",
+          false,
+          false,
+          "not_run",
+          undefined,
+          input.operations.length,
+        ),
+      };
+    }
+
+    let page = resolved.page;
+    if (page.upstreamTruncated) {
+      return this.#sequenceConflict("incomplete_page", input, context, page, false);
+    }
+    const revision = currentRevision(page);
+    const changed = input.base_revision ? revisionChanged(input.base_revision, revision) : false;
+    let autoRebased = false;
+    if (changed) {
+      const replacementIndex = input.operations.findIndex(
+        (operation) => operation.type === "replace_document",
+      );
+      if (replacementIndex >= 0) {
+        return this.#sequenceConflict(
+          "replace_document_changed",
+          input,
+          context,
+          page,
+          false,
+          replacementIndex,
+        );
+      }
+      if (input.conflict_policy === "fail_on_change") {
+        return this.#sequenceConflict("base_revision_changed", input, context, page, false);
+      }
+      const changedReplacementIndex = input.operations.findIndex(
+        (operation) =>
+          operation.type === "replace_text" && !isWholeLineMatch(page.markdown, operation.old_text),
+      );
+      if (changedReplacementIndex >= 0) {
+        return this.#sequenceConflict(
+          "same_region_changed",
+          input,
+          context,
+          page,
+          false,
+          changedReplacementIndex,
+        );
+      }
+      autoRebased = true;
+    }
+
+    let plan = planEditSequence(page.markdown, input.operations);
+    if (plan.state === "conflict") {
+      return this.#sequenceConflict(
+        plan.reason,
+        input,
+        context,
+        page,
+        autoRebased,
+        plan.operationIndex,
+      );
+    }
+    if (input.dry_run) {
+      return this.#dryRunSequence(input, plan, page, context, autoRebased);
+    }
+    if (plan.state === "already_applied") {
+      return this.#published(
+        "already_applied",
+        page,
+        "batch",
+        false,
+        autoRebased,
+        context,
+        input.operations,
+      );
+    }
+
+    let rebaseAttempts = 0;
+    while (true) {
+      try {
+        for (const command of sequenceCommands(page.markdown, plan)) {
+          const update = await this.#upstream.callTool(
+            names.updatePage,
+            {
+              page_id: page.id,
+              ...command,
+              ...(wantsAsync ? { allow_async: true } : {}),
+            },
+            "write",
+            context,
+          );
+          await this.#awaitAsync(update.value, names, context);
+        }
+        break;
+      } catch (error) {
+        const normalized = isOpsError(error) ? error : new OpsError("failed", "write failed");
+        const validationRejected = normalized.details?.["upstreamCode"] === "validation_error";
+        if (
+          !validationRejected ||
+          input.conflict_policy !== "auto_rebase" ||
+          rebaseAttempts >= MAX_REBASE_ATTEMPTS
+        ) {
+          return await this.#verifyUnknownSequence(
+            error,
+            input,
+            plan,
+            page,
+            names,
+            context,
+            autoRebased,
+          );
+        }
+        rebaseAttempts += 1;
+        autoRebased = true;
+        const refreshed = await this.#fetchPage(page.id, names, context);
+        if (refreshed.upstreamTruncated) {
+          return this.#sequenceConflict("incomplete_page", input, context, refreshed, true);
+        }
+        const refreshedPlan = planEditSequence(refreshed.markdown, input.operations);
+        if (refreshedPlan.state === "already_applied") {
+          return this.#published(
+            "already_applied",
+            refreshed,
+            "batch",
+            false,
+            true,
+            context,
+            input.operations,
+          );
+        }
+        if (refreshedPlan.state === "conflict") {
+          return this.#sequenceConflict(
+            refreshedPlan.reason,
+            input,
+            context,
+            refreshed,
+            true,
+            refreshedPlan.operationIndex,
+          );
+        }
+        page = refreshed;
+        plan = refreshedPlan;
+      }
+    }
+
+    const verified = await this.#fetchPage(page.id, names, context);
+    if (verified.upstreamTruncated || !verifyEditSequence(page.markdown, verified.markdown, plan)) {
+      return this.#sequenceConflict(
+        "verification_failed",
+        input,
+        context,
+        verified,
+        autoRebased,
+        undefined,
+        "failed",
+      );
+    }
+    return this.#published(
+      "success",
+      verified,
+      "batch",
+      false,
+      autoRebased,
+      context,
+      input.operations,
+    );
+  }
+
+  async #verifyUnknownSequence(
+    error: unknown,
+    input: BatchUpdateInput,
+    plan: Extract<EditSequencePlan, { state: "ready" }>,
+    before: PageSnapshot,
+    names: UpstreamToolNames,
+    context: OperationContext,
+    autoRebased: boolean,
+  ): Promise<PublishDocumentResult> {
+    const normalized = isOpsError(error) ? error : new OpsError("failed", "write failed");
+    try {
+      const latest = await this.#fetchPage(before.id, names, context);
+      if (!latest.upstreamTruncated && verifyEditSequence(before.markdown, latest.markdown, plan)) {
+        return this.#published(
+          "success",
+          latest,
+          "batch",
+          false,
+          autoRebased,
+          context,
+          input.operations,
+        );
+      }
+      if (normalized.details?.["upstreamCode"] === "validation_error") {
+        const latestPlan = planEditSequence(latest.markdown, input.operations);
+        if (latestPlan.state === "already_applied") {
+          return this.#published(
+            "already_applied",
+            latest,
+            "batch",
+            false,
+            autoRebased,
+            context,
+            input.operations,
+          );
+        }
+        return this.#sequenceConflict(
+          latestPlan.state === "conflict" ? latestPlan.reason : "concurrent_change",
+          input,
+          context,
+          latest,
+          autoRebased,
+          latestPlan.state === "conflict" ? latestPlan.operationIndex : undefined,
+        );
+      }
+    } catch {
+      // Preserve the original safe error classification below.
+    }
+    return this.#failure(error, context, "batch", input.operations.length);
+  }
+
   async #verifyUnknownWrite(
     error: unknown,
     input: UpdateInput,
@@ -431,7 +884,7 @@ export class PublishDocumentService {
   }
 
   async #resolveTarget(
-    input: UpdateInput,
+    input: ExistingInput,
     names: UpstreamToolNames,
     context: OperationContext,
   ): Promise<ResolvedTarget> {
@@ -524,22 +977,62 @@ export class PublishDocumentService {
     };
   }
 
-  #createdReference(value: unknown): { id: string; url?: string } {
-    const root = asRecord(value);
-    const firstPage = Array.isArray(root?.["pages"])
-      ? asRecord((root?.["pages"] as unknown[])[0])
-      : undefined;
-    const page = firstPage ?? asRecord(root?.["page"]) ?? root;
-    const url = typeof page?.["url"] === "string" ? page["url"] : undefined;
-    const idValue = page?.["id"] ?? page?.["page_id"];
-    const id = typeof idValue === "string" ? idValue : url ? pageIdFromUrl(url) : undefined;
-    if (!id) throw new OpsError("upstream_incompatible", "create result has no page reference");
-    return { id, ...(url ? { url } : {}) };
+  #dryRunSequence(
+    input: BatchUpdateInput,
+    plan: Exclude<EditSequencePlan, { state: "conflict" }>,
+    page: PageSnapshot,
+    context: OperationContext,
+    autoRebased: boolean,
+  ): PublishDocumentResult {
+    return {
+      status: "dry_run",
+      plan: {
+        operation: "batch",
+        operations: input.operations.map((operation) => operation.type),
+        target: { id: page.id, url: page.url, title: page.title },
+        added_bytes: plan.addedBytes,
+        removed_bytes: plan.removedBytes,
+        current_revision: currentRevision(page),
+      },
+      summary: this.#summary(
+        context,
+        "batch",
+        false,
+        autoRebased,
+        "not_run",
+        page,
+        input.operations.length,
+      ),
+    };
   }
 
-  #parentArguments(
-    parent: Extract<PublishDocumentInput, { markdown: string }>["target"]["parent"],
-  ): JsonObject {
+  #createdReference(value: unknown): { id: string; url?: string } {
+    const reference = this.#createdReferences(value)[0];
+    if (!reference) {
+      throw new OpsError("upstream_incompatible", "create result has no page reference");
+    }
+    return reference;
+  }
+
+  #createdReferences(value: unknown): Array<{ id: string; url?: string }> {
+    const root = asRecord(value);
+    const values = Array.isArray(root?.["pages"])
+      ? (root["pages"] as unknown[])
+      : [asRecord(root?.["page"]) ?? root];
+    const references = values.flatMap((value) => {
+      const page = asRecord(value);
+      const url = typeof page?.["url"] === "string" ? page["url"] : undefined;
+      const idValue = page?.["id"] ?? page?.["page_id"];
+      const id = typeof idValue === "string" ? idValue : url ? pageIdFromUrl(url) : undefined;
+      return id ? [{ id, ...(url ? { url } : {}) }] : [];
+    });
+    if (references.length === 0) {
+      throw new OpsError("upstream_incompatible", "create result has no page reference");
+    }
+    return references;
+  }
+
+  #parentArguments(parent: CreateInput["target"]["parent"]): JsonObject {
     return parent.type === "page_id"
       ? { page_id: parent.page_id }
       : { data_source_id: parent.data_source_id.replace(/^collection:\/\//i, "") };
@@ -560,13 +1053,39 @@ export class PublishDocumentService {
     };
   }
 
+  #sequenceConflict(
+    reason: ConflictReason,
+    input: BatchUpdateInput,
+    context: OperationContext,
+    page: PageSnapshot,
+    autoRebased: boolean,
+    operationIndex?: number,
+    verification: "not_run" | "failed" = "not_run",
+  ): PublishDocumentResult {
+    return {
+      status: "conflict",
+      reason,
+      ...(operationIndex === undefined ? {} : { operation_index: operationIndex }),
+      summary: this.#summary(
+        context,
+        "batch",
+        false,
+        autoRebased,
+        verification,
+        page,
+        input.operations.length,
+      ),
+    };
+  }
+
   #published(
     status: "success" | "already_applied",
     page: PageSnapshot,
-    operation: PublishOperation["type"] | "create",
+    operation: ExecutedOperation,
     created: boolean,
     autoRebased: boolean,
     context: OperationContext,
+    operations?: readonly PublishOperation[],
   ): PublishedResult {
     return {
       status,
@@ -574,17 +1093,27 @@ export class PublishDocumentService {
       url: page.url,
       created,
       operation,
+      ...(operations ? { operations: operations.map((item) => item.type) } : {}),
       auto_rebased: autoRebased,
       verification: "verified",
       revision: currentRevision(page),
-      summary: this.#summary(context, operation, created, autoRebased, "verified", page),
+      summary: this.#summary(
+        context,
+        operation,
+        created,
+        autoRebased,
+        "verified",
+        page,
+        operations?.length ?? 1,
+      ),
     };
   }
 
   #failure(
     error: unknown,
     context: OperationContext,
-    operation: PublishOperation["type"] | "create",
+    operation: ExecutedOperation,
+    count = 1,
   ): PublishDocumentResult {
     const normalized = isOpsError(error)
       ? error
@@ -592,7 +1121,7 @@ export class PublishDocumentService {
     if (normalized.code === "not_found") {
       return {
         status: "not_found",
-        summary: this.#summary(context, operation, false, false, "not_run"),
+        summary: this.#summary(context, operation, false, false, "not_run", undefined, count),
       };
     }
     const status =
@@ -605,7 +1134,7 @@ export class PublishDocumentService {
       reason: normalized.code,
       ...(normalized.retryAfterMs === undefined ? {} : { retry_after_ms: normalized.retryAfterMs }),
       ...(typeof authorizationUrl === "string" ? { authorization_url: authorizationUrl } : {}),
-      summary: this.#summary(context, operation, false, false, "not_run"),
+      summary: this.#summary(context, operation, false, false, "not_run", undefined, count),
     };
   }
 
@@ -616,6 +1145,7 @@ export class PublishDocumentService {
       summary: {
         operation: "publish",
         executed_operation: "create",
+        operation_count: 1,
         created: false,
         auto_rebased: false,
         verification: "not_run",
@@ -628,15 +1158,17 @@ export class PublishDocumentService {
 
   #summary(
     context: OperationContext,
-    operation: PublishOperation["type"] | "create",
+    operation: ExecutedOperation,
     created: boolean,
     autoRebased: boolean,
     verification: "verified" | "not_run" | "failed",
     page?: PageSnapshot,
+    count = 1,
   ): PublishSummary {
     return {
       operation: "publish",
       executed_operation: operation,
+      operation_count: count,
       created,
       auto_rebased: autoRebased,
       verification,

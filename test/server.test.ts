@@ -33,6 +33,7 @@ describe("notion-ops MCP server", () => {
             summary: {
               operation: "publish" as const,
               executed_operation: "append" as const,
+              operation_count: 1,
               created: false,
               auto_rebased: false,
               verification: "not_run" as const,

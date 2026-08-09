@@ -68,6 +68,60 @@ describe("notion_publish_document", () => {
     expect(fake.calls).toHaveLength(0);
   });
 
+  it("creates multiple pages in one upstream write and verifies each page", async () => {
+    const fake = new FakeNotionMcp();
+    const { publish } = services(fake);
+
+    const result = await publish.execute({
+      target: {
+        type: "create_batch",
+        parent: { type: "page_id", page_id: PARENT_ID },
+      },
+      pages: [
+        { title: "Plan A", markdown: "# Plan A\n\nAlpha" },
+        { title: "Plan B", markdown: "# Plan B\n\nBeta" },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      status: "success",
+      operation: "create_batch",
+      created_count: 2,
+      verified_count: 2,
+      summary: { operation_count: 2, upstream_tool_calls: 3 },
+    });
+    expect(fake.calls.map((call) => call.name)).toEqual([
+      "notion-create-pages",
+      "notion-fetch",
+      "notion-fetch",
+    ]);
+    expect(fake.calls[0]?.arguments["pages"]).toHaveLength(2);
+  });
+
+  it("returns a batch create dry-run without authenticating or writing", async () => {
+    const fake = new FakeNotionMcp();
+    const { publish } = services(fake);
+
+    const result = await publish.execute({
+      target: {
+        type: "create_batch",
+        parent: { type: "page_id", page_id: PARENT_ID },
+      },
+      pages: [
+        { title: "A", markdown: "Alpha" },
+        { title: "B", markdown: "Beta" },
+      ],
+      dry_run: true,
+    });
+
+    expect(result).toMatchObject({
+      status: "dry_run",
+      plan: { operation: "create_batch", added_bytes: 9, removed_bytes: 0 },
+      summary: { operation_count: 2 },
+    });
+    expect(fake.calls).toHaveLength(0);
+  });
+
   it("preserves a user prepend and auto-rebases a unique whole-line replacement", async () => {
     const fake = new FakeNotionMcp();
     const page = fake.addPage({
@@ -173,6 +227,97 @@ describe("notion_publish_document", () => {
     expect(result).toMatchObject({ status: "already_applied", verification: "verified" });
     expect(fake.calls.map((call) => call.name)).toEqual(["notion-fetch"]);
     expect(fake.pages.get(page.id)?.markdown.match(/requested/g)).toHaveLength(1);
+  });
+
+  it("combines independent edits into one upstream update", async () => {
+    const fake = new FakeNotionMcp();
+    const page = fake.addPage({
+      title: "Doc",
+      markdown: "# Doc\n\nFirst paragraph\n\nSecond paragraph",
+    });
+    const { publish } = services(fake);
+
+    const result = await publish.execute({
+      target: { type: "page_id", page_id: page.id },
+      operations: [
+        { type: "replace_text", old_text: "First paragraph", new_text: "First updated" },
+        { type: "replace_text", old_text: "Second paragraph", new_text: "Second updated" },
+      ],
+      conflict_policy: "auto_rebase",
+    });
+
+    expect(result).toMatchObject({
+      status: "success",
+      operation: "batch",
+      operations: ["replace_text", "replace_text"],
+      summary: { operation_count: 2, upstream_tool_calls: 3 },
+    });
+    const updates = fake.calls.filter((call) => call.name === "notion-update-page");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.arguments["content_updates"]).toHaveLength(2);
+    expect(fake.pages.get(page.id)?.markdown).toBe("# Doc\n\nFirst updated\n\nSecond updated");
+  });
+
+  it("keeps dependent edits ordered across upstream updates", async () => {
+    const fake = new FakeNotionMcp();
+    const page = fake.addPage({ title: "Doc", markdown: "First" });
+    const { publish } = services(fake);
+
+    const result = await publish.execute({
+      target: { type: "page_id", page_id: page.id },
+      operations: [
+        { type: "replace_text", old_text: "First", new_text: "Middle" },
+        { type: "replace_text", old_text: "Middle", new_text: "Last" },
+      ],
+      conflict_policy: "auto_rebase",
+    });
+
+    expect(result).toMatchObject({ status: "success", operation: "batch" });
+    expect(fake.calls.filter((call) => call.name === "notion-update-page")).toHaveLength(2);
+    expect(fake.pages.get(page.id)?.markdown).toBe("Last");
+  });
+
+  it("reports which operation conflicts before writing a sequence", async () => {
+    const fake = new FakeNotionMcp();
+    const page = fake.addPage({ title: "Doc", markdown: "# Doc\n\nBody" });
+    const { publish } = services(fake);
+
+    const result = await publish.execute({
+      target: { type: "page_id", page_id: page.id },
+      operations: [
+        { type: "append", markdown: "Tail" },
+        {
+          type: "insert_after",
+          anchor: { kind: "heading", text: "Missing" },
+          markdown: "Unsafe",
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      status: "conflict",
+      reason: "anchor_missing",
+      operation_index: 1,
+      summary: { operation_count: 2 },
+    });
+    expect(fake.calls.filter((call) => call.name === "notion-update-page")).toHaveLength(0);
+  });
+
+  it("rejects a replace_document mixed with other operations", async () => {
+    const fake = new FakeNotionMcp();
+    const page = fake.addPage({ title: "Doc", markdown: "old" });
+    const { publish } = services(fake);
+
+    const result = await publish.execute({
+      target: { type: "page_id", page_id: page.id },
+      operations: [
+        { type: "replace_document", markdown: "new", confirm_replace_document: true },
+        { type: "append", markdown: "tail" },
+      ],
+    });
+
+    expect(result).toMatchObject({ status: "failed", reason: "invalid_input" });
+    expect(fake.calls).toHaveLength(0);
   });
 
   it("keeps a concurrent append when applying another append", async () => {

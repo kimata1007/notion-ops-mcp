@@ -5,6 +5,7 @@ export const DEFAULT_OUTPUT_BYTES = 64 * 1024;
 export const MAX_INPUT_MARKDOWN_BYTES = 1024 * 1024;
 export const DEFAULT_SEARCH_CANDIDATES = 10;
 export const MAX_BATCH_DOCUMENTS = 8;
+export const MAX_PUBLISH_OPERATIONS = 10;
 export const BATCH_CONCURRENCY = 3;
 export const MAX_READ_TOOL_CALLS = 4;
 export const MAX_PUBLISH_TOOL_CALLS = 10;
