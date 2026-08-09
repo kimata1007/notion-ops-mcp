@@ -1,2 +1,5 @@
-export const PACKAGE_NAME = "notion-ops-mcp";
-export const PACKAGE_VERSION = "0.1.0";
+export { OpsError } from "./errors.js";
+export { PACKAGE_NAME, PACKAGE_VERSION } from "./package.js";
+export { OperationContext } from "./upstream/context.js";
+export { McpUpstreamClient } from "./upstream/mcp-client.js";
+export { UpstreamToolCatalog } from "./upstream/tool-catalog.js";

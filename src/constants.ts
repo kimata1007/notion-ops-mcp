@@ -1,0 +1,10 @@
+export const DEFAULT_UPSTREAM_URL = "https://mcp.notion.com/mcp";
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+export const MAX_REQUEST_TIMEOUT_MS = 120_000;
+export const DEFAULT_OUTPUT_BYTES = 64 * 1024;
+export const MAX_INPUT_MARKDOWN_BYTES = 1024 * 1024;
+export const DEFAULT_SEARCH_CANDIDATES = 10;
+export const MAX_READ_TOOL_CALLS = 4;
+export const MAX_PUBLISH_TOOL_CALLS = 10;
+export const MAX_READ_RETRIES = 2;
+export const MAX_REBASE_ATTEMPTS = 2;
