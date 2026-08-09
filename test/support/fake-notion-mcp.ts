@@ -42,8 +42,10 @@ function occurrences(haystack: string, needle: string): number {
 export class FakeNotionMcp {
   readonly pages = new Map<string, FakePage>();
   readonly calls: FakeCall[] = [];
+  asyncWrites = false;
   beforeCall?: (call: FakeCall, fake: FakeNotionMcp) => void | Promise<void>;
   #clock = 0;
+  readonly #tasks = new Map<string, unknown>();
 
   addPage(input: { id?: string; title: string; markdown: string; url?: string }): FakePage {
     const id = input.id ?? randomUUID();
@@ -145,9 +147,10 @@ export class FakeNotionMcp {
             markdown: input.content,
           }),
         );
-        return jsonResult({
+        const result = {
           pages: created.map((page) => ({ id: page.id, url: page.url })),
-        });
+        };
+        return this.#writeResult(result, allow_async);
       },
     );
 
@@ -163,7 +166,10 @@ export class FakeNotionMcp {
               .optional(),
             new_str: z.string().optional(),
             content: z.string().optional(),
-            position: z.enum(["start", "end"]).optional(),
+            position: z
+              .object({ type: z.enum(["start", "end"]) })
+              .strict()
+              .optional(),
             allow_async: z.boolean().optional(),
           })
           .strict(),
@@ -186,16 +192,16 @@ export class FakeNotionMcp {
           }
           page.markdown = input.new_str;
         } else {
-          if (input.content === undefined || input.position === undefined) {
+          if (input.content === undefined) {
             return jsonResult({ status: 400, code: "validation_error" }, true);
           }
           page.markdown =
-            input.position === "start"
+            input.position?.type === "start"
               ? `${input.content}\n\n${page.markdown}`
               : `${page.markdown}\n\n${input.content}`;
         }
         page.last_edited_time = this.#nextEditedTime();
-        return jsonResult({ id: page.id, url: page.url });
+        return this.#writeResult({ id: page.id, url: page.url }, input.allow_async);
       },
     );
 
@@ -204,7 +210,10 @@ export class FakeNotionMcp {
       { inputSchema: z.object({ task_id: z.string() }).strict() },
       async ({ task_id }) => {
         await this.#record("notion-get-async-task", { task_id });
-        return jsonResult({ object: "async_task", id: task_id, status: "failed" });
+        const result = this.#tasks.get(task_id);
+        return result === undefined
+          ? jsonResult({ object: "async_task", id: task_id, status: "failed" })
+          : jsonResult({ object: "async_task", id: task_id, status: "succeeded", result });
       },
     );
     return server;
@@ -214,6 +223,18 @@ export class FakeNotionMcp {
     const call = { name, arguments: arguments_ };
     this.calls.push(call);
     await this.beforeCall?.(call, this);
+  }
+
+  #writeResult(result: unknown, allowAsync: boolean | undefined) {
+    if (!this.asyncWrites || !allowAsync) return jsonResult(result);
+    const taskId = `task_${this.#tasks.size + 1}`;
+    this.#tasks.set(taskId, result);
+    return jsonResult({
+      object: "async_task",
+      id: taskId,
+      status: "queued",
+      poll_after_seconds: 0,
+    });
   }
 
   #nextEditedTime(): string {

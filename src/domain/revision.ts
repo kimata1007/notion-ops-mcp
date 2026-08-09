@@ -7,6 +7,7 @@ export const RevisionSchema = z
     version: z.literal(1),
     last_edited_time: z.iso.datetime({ offset: true }),
     content_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    last_edited_time_source: z.enum(["page", "snapshot"]).optional(),
   })
   .strict();
 
