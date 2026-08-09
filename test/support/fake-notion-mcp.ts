@@ -43,10 +43,13 @@ export class FakeNotionMcp {
   readonly pages = new Map<string, FakePage>();
   readonly calls: FakeCall[] = [];
   readonly truncatedPages = new Set<string>();
+  readonly omittedTools = new Set<string>();
   asyncWrites = false;
+  asyncTasksFail = false;
   beforeCall?: (call: FakeCall, fake: FakeNotionMcp) => void | Promise<void>;
   #clock = 0;
   readonly #tasks = new Map<string, unknown>();
+  readonly #queuedErrors = new Map<string, JsonObject[]>();
 
   addPage(input: { id?: string; title: string; markdown: string; url?: string }): FakePage {
     const id = input.id ?? randomUUID();
@@ -68,6 +71,12 @@ export class FakeNotionMcp {
     page.last_edited_time = this.#nextEditedTime();
   }
 
+  queueError(toolName: string, payload: JsonObject): void {
+    const queued = this.#queuedErrors.get(toolName) ?? [];
+    queued.push(payload);
+    this.#queuedErrors.set(toolName, queued);
+  }
+
   transportFactory = async (): Promise<Transport> => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = this.#createServer();
@@ -78,153 +87,164 @@ export class FakeNotionMcp {
   #createServer(): McpServer {
     const server = new McpServer({ name: "fake-notion-mcp", version: "1.0.0" });
 
-    server.registerTool(
-      "notion-search",
-      { inputSchema: z.object({ query: z.string() }).strict() },
-      async ({ query }) => {
-        await this.#record("notion-search", { query });
-        const normalized = query.toLocaleLowerCase();
-        const results = [...this.pages.values()]
-          .filter(
-            (page) =>
-              page.title.toLocaleLowerCase().includes(normalized) ||
-              page.markdown.toLocaleLowerCase().includes(normalized),
-          )
-          .slice(0, 25)
-          .map((page) => ({
-            id: page.id,
+    if (!this.omittedTools.has("notion-search"))
+      server.registerTool(
+        "notion-search",
+        { inputSchema: z.object({ query: z.string() }).strict() },
+        async ({ query }) => {
+          const error = await this.#record("notion-search", { query });
+          if (error) return jsonResult(error, true);
+          const normalized = query.toLocaleLowerCase();
+          const results = [...this.pages.values()]
+            .filter(
+              (page) =>
+                page.title.toLocaleLowerCase().includes(normalized) ||
+                page.markdown.toLocaleLowerCase().includes(normalized),
+            )
+            .slice(0, 25)
+            .map((page) => ({
+              id: page.id,
+              title: page.title,
+              url: page.url,
+              type: "page",
+            }));
+          return jsonResult({ results });
+        },
+      );
+
+    if (!this.omittedTools.has("notion-fetch"))
+      server.registerTool(
+        "notion-fetch",
+        { inputSchema: z.object({ id: z.string() }).strict() },
+        async ({ id }) => {
+          const error = await this.#record("notion-fetch", { id });
+          if (error) return jsonResult(error, true);
+          const page = [...this.pages.values()].find(
+            (candidate) => candidate.id === id || candidate.url === id,
+          );
+          if (!page) {
+            return jsonResult({ status: 404, code: "object_not_found" }, true);
+          }
+          return jsonResult({
+            metadata: { type: "page" },
             title: page.title,
             url: page.url,
-            type: "page",
-          }));
-        return jsonResult({ results });
-      },
-    );
+            text: page.markdown,
+            page: { id: page.id, last_edited_time: page.last_edited_time },
+            truncated: this.truncatedPages.has(page.id),
+          });
+        },
+      );
 
-    server.registerTool(
-      "notion-fetch",
-      { inputSchema: z.object({ id: z.string() }).strict() },
-      async ({ id }) => {
-        await this.#record("notion-fetch", { id });
-        const page = [...this.pages.values()].find(
-          (candidate) => candidate.id === id || candidate.url === id,
-        );
-        if (!page) {
-          return jsonResult({ status: 404, code: "object_not_found" }, true);
-        }
-        return jsonResult({
-          metadata: { type: "page" },
-          title: page.title,
-          url: page.url,
-          text: page.markdown,
-          page: { id: page.id, last_edited_time: page.last_edited_time },
-          truncated: this.truncatedPages.has(page.id),
-        });
-      },
-    );
+    if (!this.omittedTools.has("notion-create-pages"))
+      server.registerTool(
+        "notion-create-pages",
+        {
+          inputSchema: z
+            .object({
+              parent: z.record(z.string(), z.string()),
+              pages: z.array(
+                z
+                  .object({
+                    properties: z.object({ title: z.string() }).passthrough(),
+                    content: z.string(),
+                  })
+                  .passthrough(),
+              ),
+              allow_async: z.boolean().optional(),
+            })
+            .strict(),
+        },
+        async ({ parent, pages, allow_async }) => {
+          const error = await this.#record("notion-create-pages", { parent, pages, allow_async });
+          if (error) return jsonResult(error, true);
+          const created = pages.map((input) =>
+            this.addPage({
+              title: input.properties.title,
+              markdown: input.content,
+            }),
+          );
+          const result = {
+            pages: created.map((page) => ({ id: page.id, url: page.url })),
+          };
+          return this.#writeResult(result, allow_async);
+        },
+      );
 
-    server.registerTool(
-      "notion-create-pages",
-      {
-        inputSchema: z
-          .object({
-            parent: z.record(z.string(), z.string()),
-            pages: z.array(
-              z
-                .object({
-                  properties: z.object({ title: z.string() }).passthrough(),
-                  content: z.string(),
-                })
-                .passthrough(),
-            ),
-            allow_async: z.boolean().optional(),
-          })
-          .strict(),
-      },
-      async ({ parent, pages, allow_async }) => {
-        await this.#record("notion-create-pages", { parent, pages, allow_async });
-        const created = pages.map((input) =>
-          this.addPage({
-            title: input.properties.title,
-            markdown: input.content,
-          }),
-        );
-        const result = {
-          pages: created.map((page) => ({ id: page.id, url: page.url })),
-        };
-        return this.#writeResult(result, allow_async);
-      },
-    );
+    if (!this.omittedTools.has("notion-update-page"))
+      server.registerTool(
+        "notion-update-page",
+        {
+          inputSchema: z
+            .object({
+              page_id: z.string(),
+              command: z.enum(["update_content", "replace_content", "insert_content"]),
+              content_updates: z
+                .array(z.object({ old_str: z.string(), new_str: z.string() }).strict())
+                .optional(),
+              new_str: z.string().optional(),
+              content: z.string().optional(),
+              position: z
+                .object({ type: z.enum(["start", "end"]) })
+                .strict()
+                .optional(),
+              allow_async: z.boolean().optional(),
+            })
+            .strict(),
+        },
+        async (input) => {
+          const error = await this.#record("notion-update-page", input as JsonObject);
+          if (error) return jsonResult(error, true);
+          const page = this.pages.get(input.page_id);
+          if (!page) return jsonResult({ status: 404, code: "object_not_found" }, true);
 
-    server.registerTool(
-      "notion-update-page",
-      {
-        inputSchema: z
-          .object({
-            page_id: z.string(),
-            command: z.enum(["update_content", "replace_content", "insert_content"]),
-            content_updates: z
-              .array(z.object({ old_str: z.string(), new_str: z.string() }).strict())
-              .optional(),
-            new_str: z.string().optional(),
-            content: z.string().optional(),
-            position: z
-              .object({ type: z.enum(["start", "end"]) })
-              .strict()
-              .optional(),
-            allow_async: z.boolean().optional(),
-          })
-          .strict(),
-      },
-      async (input) => {
-        await this.#record("notion-update-page", input as JsonObject);
-        const page = this.pages.get(input.page_id);
-        if (!page) return jsonResult({ status: 404, code: "object_not_found" }, true);
-
-        if (input.command === "update_content") {
-          for (const update of input.content_updates ?? []) {
-            if (occurrences(page.markdown, update.old_str) !== 1) {
+          if (input.command === "update_content") {
+            for (const update of input.content_updates ?? []) {
+              if (occurrences(page.markdown, update.old_str) !== 1) {
+                return jsonResult({ status: 400, code: "validation_error" }, true);
+              }
+              page.markdown = page.markdown.replace(update.old_str, update.new_str);
+            }
+          } else if (input.command === "replace_content") {
+            if (input.new_str === undefined) {
               return jsonResult({ status: 400, code: "validation_error" }, true);
             }
-            page.markdown = page.markdown.replace(update.old_str, update.new_str);
+            page.markdown = input.new_str;
+          } else {
+            if (input.content === undefined) {
+              return jsonResult({ status: 400, code: "validation_error" }, true);
+            }
+            page.markdown =
+              input.position?.type === "start"
+                ? `${input.content}\n\n${page.markdown}`
+                : `${page.markdown}\n\n${input.content}`;
           }
-        } else if (input.command === "replace_content") {
-          if (input.new_str === undefined) {
-            return jsonResult({ status: 400, code: "validation_error" }, true);
-          }
-          page.markdown = input.new_str;
-        } else {
-          if (input.content === undefined) {
-            return jsonResult({ status: 400, code: "validation_error" }, true);
-          }
-          page.markdown =
-            input.position?.type === "start"
-              ? `${input.content}\n\n${page.markdown}`
-              : `${page.markdown}\n\n${input.content}`;
-        }
-        page.last_edited_time = this.#nextEditedTime();
-        return this.#writeResult({ id: page.id, url: page.url }, input.allow_async);
-      },
-    );
+          page.last_edited_time = this.#nextEditedTime();
+          return this.#writeResult({ id: page.id, url: page.url }, input.allow_async);
+        },
+      );
 
-    server.registerTool(
-      "notion-get-async-task",
-      { inputSchema: z.object({ task_id: z.string() }).strict() },
-      async ({ task_id }) => {
-        await this.#record("notion-get-async-task", { task_id });
-        const result = this.#tasks.get(task_id);
-        return result === undefined
-          ? jsonResult({ object: "async_task", id: task_id, status: "failed" })
-          : jsonResult({ object: "async_task", id: task_id, status: "succeeded", result });
-      },
-    );
+    if (!this.omittedTools.has("notion-get-async-task"))
+      server.registerTool(
+        "notion-get-async-task",
+        { inputSchema: z.object({ task_id: z.string() }).strict() },
+        async ({ task_id }) => {
+          const error = await this.#record("notion-get-async-task", { task_id });
+          if (error) return jsonResult(error, true);
+          const result = this.#tasks.get(task_id);
+          return result === undefined || this.asyncTasksFail
+            ? jsonResult({ object: "async_task", id: task_id, status: "failed" })
+            : jsonResult({ object: "async_task", id: task_id, status: "succeeded", result });
+        },
+      );
     return server;
   }
 
-  async #record(name: string, arguments_: JsonObject): Promise<void> {
+  async #record(name: string, arguments_: JsonObject): Promise<JsonObject | undefined> {
     const call = { name, arguments: arguments_ };
     this.calls.push(call);
     await this.beforeCall?.(call, this);
+    return this.#queuedErrors.get(name)?.shift();
   }
 
   #writeResult(result: unknown, allowAsync: boolean | undefined) {
