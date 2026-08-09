@@ -15,7 +15,6 @@ export interface NotionOpsServices {
 function compactResult(result: ReadDocumentResult | PublishDocumentResult): CallToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(result) }],
-    structuredContent: result as unknown as Record<string, unknown>,
   };
 }
 

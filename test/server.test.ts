@@ -68,6 +68,7 @@ describe("notion-ops MCP server", () => {
         }),
       },
     ]);
+    expect(result.structuredContent).toBeUndefined();
     expect(readDocument).toHaveBeenCalledOnce();
     expect(logs).toHaveLength(1);
     expect(logs[0]).not.toContain("missing");
