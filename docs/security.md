@@ -18,7 +18,13 @@ Notion token、OAuth client secret/refresh token、ページ本文、検索結�
 - cancellation を一つの AbortSignal に統合し、上流 transport へ伝播する。
 - テスト fixture には実 ID、token、本文を含めない。
 
-プロセス内 idempotency は request fingerprint と call-local write ledger で実装する。プロセス障害を越える
-exactly-once は Notion MCP に idempotency key/CAS がないため保証しない。不明結果では再取得検証を行い、
-判定不能なら failed を返す。
+call-local な重複防止は、最新版に要求内容が一度だけ存在するかを操作別に判定して実装する。プロセス障害を
+越える exactly-once は Notion MCP に idempotency key/CAS がないため保証しない。不明結果では write を
+再送せず再取得検証を行い、判定不能なら failed を返す。
 
+## 残るリスク
+
+- 資格情報ファイルは暗号化されない。端末の disk encryption と OS account の保護が必要である。
+- Notion の CAS 不在により、直前取得と write、write と検証取得の間に小さい競合窓が残る。
+- 取得本文は呼び出し元モデルへ返るため、その MCP client とモデルのデータ取扱いも信頼境界に含まれる。
+- `NOTION_MCP_URL` で指定した endpoint は明示的な信頼対象になる。既定の公式 endpoint を推奨する。

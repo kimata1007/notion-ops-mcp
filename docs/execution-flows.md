@@ -16,7 +16,7 @@
 1. 対象を確定する。検索の 0/複数候補には書き込まない。
 2. 新規作成は dry-run でなければ一回だけ create し、fetch で検証する。
 3. 既存更新は書き込み直前に fetch し、revision と操作対象の一意性を検査する。
-4. request fingerprint と最新版から `already_applied` を判定する。
+4. 要求内容と最新版を比較し、内容が一度だけ反映済みなら `already_applied` と判定する。
 5. 決定的な予定本文と、上流の対象限定 command を作る。
 6. 書き込みは一回だけ行う。不明な transport failure は再送せず fetch して適用済みか判定する。
 7. fetch した最新版で要求が一度だけ反映され、書き込み前の非対象部分が保持されたことを検証する。
@@ -35,11 +35,10 @@
 - `auto_rebase` でも同じ対象箇所が双方で変化した可能性を決定的に否定できない場合は停止する。
 
 Notion MCP/Markdown API に compare-and-swap はない。直前取得と直後検証の間の競合窓は残るため、検証不能
-なら成功を返さない。rebase/再取得は各二回までで、同じ指紋の write を無条件に再送しない。
+なら成功を返さない。validation error 後の rebase は二回までで、同じ write を無条件に再送しない。
 
 ## 非同期処理
 
 大きい Markdown では create/update に `allow_async: true` を付けられる。`async_task` が返った場合だけ
 `notion-get-async-task` を `poll_after_seconds` 以上の間隔、全体 deadline 内、回数上限内で poll する。
 `succeeded` の result を通常応答として処理し、`failed` や deadline 超過を成功扱いしない。
-

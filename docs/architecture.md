@@ -14,19 +14,20 @@
 stdio MCP server
   -> strict input schemas
   -> read/publish application services
-  -> UpstreamNotion interface
+  -> McpUpstreamClient boundary
        -> authenticated Streamable HTTP MCP adapter
        -> protocol-level fake MCP server in tests
   -> compact result formatter
 ```
 
-- `UpstreamNotion` は connect/reconnect、`tools/list`、Tool 呼び出し、timeout/cancel、エラー正規化を担う。
+- `McpUpstreamClient` は connect/reconnect、`tools/list`、Tool 呼び出し、timeout/cancel、エラー正規化を担う。
 - アプリケーションサービスは検索候補の確定、revision、決定的な文字列編集、検証を担う。
 - 認証層は PAT/OAuth の選択、refresh、保存を担い、ページ本文を受け取らない。
 - logger は Tool 名、状態、回数、retry、経過時間だけを stderr へ出す。
 
-一回の外向き Tool Call に対して request scope を作り、上流呼び出し数、deadline、AbortSignal、
-idempotency fingerprint を保持する。状態は呼び出し終了時に破棄し、クロスランキャッシュは持たない。
+一回の外向き Tool Call に対して request scope を作り、上流呼び出し数、deadline、AbortSignal、retry 数を
+保持する。状態は呼び出し終了時に破棄し、クロスランキャッシュは持たない。重複防止は最新版の本文と
+要求操作を比較する call-local な判定で行う。
 
 ## 上流互換性
 
@@ -50,7 +51,7 @@ OpenAI MCP クライアントでは search/fetch の prefix が省略される�
 
 ## 制限
 
-既定値は環境変数で下方調整できるが、コード上の hard ceiling を超えられない。
+Tool 入力で timeout と返却本文上限を下方調整できるが、コード上の hard ceiling を超えられない。
 
 - 外向き request deadline: 30 秒（hard ceiling 120 秒）
 - 上流 Tool Call: read 4 回、publish 10 回
@@ -67,4 +68,3 @@ OpenAI MCP クライアントでは search/fetch の prefix が省略される�
 - [Build an MCP client for Notion](https://developers.notion.com/guides/mcp/build-mcp-client)
 - [Working with markdown content](https://developers.notion.com/guides/data-apis/working-with-markdown-content)
 - [MCP TypeScript SDK](https://ts.sdk.modelcontextprotocol.io/)
-
