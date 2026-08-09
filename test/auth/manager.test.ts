@@ -70,6 +70,23 @@ function json(value: unknown, status = 200): Response {
 }
 
 describe("AuthManager", () => {
+  it("checks existing authentication without starting OAuth", async () => {
+    const store = new MemoryStore();
+    const loopback = new MemoryLoopback();
+    const manager = new AuthManager({
+      endpoint: new URL("https://mcp.notion.com/mcp"),
+      store,
+      environment: {},
+      loopbackFactory: loopback.factory,
+    });
+
+    await expect(
+      manager.getAccessTokenIfAvailable(AbortSignal.timeout(1_000)),
+    ).resolves.toBeUndefined();
+    expect(loopback.handler).toBeUndefined();
+    await manager.close();
+  });
+
   it("gives NOTION_TOKEN priority and never opens OAuth", async () => {
     const store = new MemoryStore(credential({ expires_at: 1 }));
     const manager = new AuthManager({

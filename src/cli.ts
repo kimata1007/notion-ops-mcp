@@ -8,6 +8,7 @@ import { SafeLogger } from "./logger.js";
 import { createNotionOpsServer } from "./server.js";
 import { PublishDocumentService } from "./tools/publish-document.js";
 import { ReadDocumentService } from "./tools/read-document.js";
+import { OperationContext } from "./upstream/context.js";
 import { McpUpstreamClient } from "./upstream/mcp-client.js";
 
 async function main(): Promise<void> {
@@ -50,6 +51,17 @@ async function main(): Promise<void> {
 
   await server.connect(transport);
   logger.info("server_started", { transport: "stdio" });
+  const warmContext = new OperationContext("read");
+  void upstream
+    .warm(warmContext)
+    .then((warmed) => {
+      logger.info("upstream_warmup_completed", { warmed });
+    })
+    .catch((error: unknown) => {
+      logger.error("upstream_warmup_failed", {
+        error_type: error instanceof Error ? error.name : "unknown",
+      });
+    });
 }
 
 main().catch((error: unknown) => {

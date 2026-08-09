@@ -123,6 +123,16 @@ export class AuthManager implements AccessTokenSource {
   }
 
   async getAccessToken(signal: AbortSignal): Promise<string | undefined> {
+    const existing = await this.getAccessTokenIfAvailable(signal);
+    if (existing) return existing;
+
+    const pending = await this.#startOnce(signal);
+    throw new OpsError("auth_required", "Notion authorization is required", {
+      details: { authorizationUrl: pending.authorizationUrl, expiresAt: pending.expiresAt },
+    });
+  }
+
+  async getAccessTokenIfAvailable(signal: AbortSignal): Promise<string | undefined> {
     const personalAccessToken = this.#environment["NOTION_TOKEN"]?.trim();
     if (personalAccessToken) return personalAccessToken;
 
@@ -143,14 +153,11 @@ export class AuthManager implements AccessTokenSource {
           }
           await this.#store.clear();
           this.#logger?.info("oauth_reauthentication_required", { reason: "invalid_grant" });
+          return undefined;
         }
       }
     }
-
-    const pending = await this.#startOnce(signal);
-    throw new OpsError("auth_required", "Notion authorization is required", {
-      details: { authorizationUrl: pending.authorizationUrl, expiresAt: pending.expiresAt },
-    });
+    return undefined;
   }
 
   async handleUnauthorized(): Promise<void> {

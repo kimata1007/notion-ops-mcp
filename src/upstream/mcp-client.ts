@@ -13,6 +13,7 @@ import type { JsonObject, UpstreamCallResult, UpstreamToolDefinition } from "./t
 
 export interface AccessTokenSource {
   getAccessToken(signal: AbortSignal): Promise<string | undefined>;
+  getAccessTokenIfAvailable?(signal: AbortSignal): Promise<string | undefined>;
   handleUnauthorized?(): Promise<void>;
 }
 
@@ -89,6 +90,26 @@ export class McpUpstreamClient {
     }
   }
 
+  async warm(context: OperationContext): Promise<boolean> {
+    if (this.#client && this.#catalog) return true;
+    const getAvailable = this.#tokenSource.getAccessTokenIfAvailable;
+    if (!getAvailable) return false;
+    const accessToken = await getAvailable.call(this.#tokenSource, context.signal);
+    if (!accessToken) return false;
+    if (this.#client && this.#catalog) return true;
+    if (this.#connecting) {
+      await this.#connecting;
+      return true;
+    }
+    this.#connecting = this.#connect(context, accessToken);
+    try {
+      await this.#connecting;
+      return true;
+    } finally {
+      this.#connecting = undefined;
+    }
+  }
+
   async reconnect(context: OperationContext): Promise<void> {
     await this.close();
     await this.connect(context);
@@ -155,8 +176,9 @@ export class McpUpstreamClient {
     if (client) await client.close();
   }
 
-  async #connect(context: OperationContext): Promise<void> {
-    const accessToken = await this.#tokenSource.getAccessToken(context.signal);
+  async #connect(context: OperationContext, availableAccessToken?: string): Promise<void> {
+    const accessToken =
+      availableAccessToken ?? (await this.#tokenSource.getAccessToken(context.signal));
     if (!accessToken) throw new OpsError("auth_required", "Notion authentication is required");
     const transport = await this.#transportFactory(this.#endpoint, accessToken, context.signal);
     const client = new Client(
