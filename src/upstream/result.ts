@@ -96,5 +96,16 @@ export function normalizeThrownError(error: unknown, signal: AbortSignal): OpsEr
   ) {
     return new OpsError("timeout", "upstream request timed out", { retryable: true });
   }
+  const systemCode = String(record["code"] ?? "");
+  if (
+    error instanceof TypeError ||
+    status >= 500 ||
+    ["ECONNRESET", "ECONNREFUSED", "EPIPE", "ENETUNREACH", "EAI_AGAIN"].includes(systemCode)
+  ) {
+    return new OpsError("failed", "transient upstream request failed", {
+      retryable: true,
+      cause: error,
+    });
+  }
   return new OpsError("failed", "upstream request failed", { cause: error });
 }
