@@ -47,23 +47,37 @@ function errorFromPayload(payload: unknown): OpsError {
 }
 
 export function parseToolResult(result: CallToolResult): UpstreamCallResult {
+  if (result.structuredContent !== undefined) {
+    if (result.isError) throw errorFromPayload(result.structuredContent);
+    return {
+      value: result.structuredContent,
+      rawTextBytes: Buffer.byteLength(JSON.stringify(result.structuredContent), "utf8"),
+    };
+  }
+
   const textBlocks = result.content.filter(
     (block): block is Extract<(typeof result.content)[number], { type: "text" }> =>
       block.type === "text",
   );
-  if (textBlocks.length !== 1) {
-    throw new OpsError("upstream_incompatible", "upstream result must contain one JSON text block");
+  const jsonBlocks: Array<{ text: string; value: unknown }> = [];
+  for (const { text } of textBlocks) {
+    try {
+      jsonBlocks.push({ text, value: JSON.parse(text) });
+    } catch {
+      // An upstream server may include a human-readable companion block.
+    }
   }
-  const text = textBlocks[0]?.text;
-  if (text === undefined) {
-    throw new OpsError("upstream_incompatible", "upstream result text is missing");
+  if (jsonBlocks.length !== 1) {
+    throw new OpsError(
+      "upstream_incompatible",
+      "upstream result must contain structured content or one unambiguous JSON text block",
+    );
   }
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    throw new OpsError("upstream_incompatible", "upstream result text is not JSON");
+  const jsonBlock = jsonBlocks[0];
+  if (!jsonBlock) {
+    throw new OpsError("upstream_incompatible", "upstream JSON payload disappeared");
   }
+  const { text, value } = jsonBlock;
   if (result.isError) throw errorFromPayload(value);
   return { value, rawTextBytes: Buffer.byteLength(text, "utf8") };
 }

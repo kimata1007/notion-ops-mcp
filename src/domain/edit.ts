@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 
+import { canonicalizeNotionMarkdown, notionMarkdownEquivalent } from "../notion/markdown.js";
 import type { PublishOperation } from "../tools/schemas.js";
 import type { JsonObject } from "../upstream/types.js";
 
@@ -77,10 +78,12 @@ function targetedPlan(
   newFragment: string,
   content: string,
 ): EditPlan {
-  if (countOccurrences(markdown, newFragment) === 1) {
+  const canonicalMarkdown = canonicalizeNotionMarkdown(markdown);
+  const canonicalNewFragment = canonicalizeNotionMarkdown(newFragment);
+  if (countOccurrences(canonicalMarkdown, canonicalNewFragment) === 1) {
     return { state: "already_applied", expectedMarkdown: markdown };
   }
-  if (content && countOccurrences(markdown, content) > 0) {
+  if (content && countOccurrences(canonicalMarkdown, canonicalizeNotionMarkdown(content)) > 0) {
     return { state: "conflict", reason: "requested_content_already_exists_elsewhere" };
   }
   const expectedMarkdown = markdown.replace(oldFragment, newFragment);
@@ -102,12 +105,13 @@ export function planEdit(markdown: string, operation: PublishOperation): EditPla
   switch (operation.type) {
     case "append": {
       const expectedMarkdown = join(markdown, operation.markdown);
-      if (expectedMarkdown === markdown)
+      if (notionMarkdownEquivalent(expectedMarkdown, markdown))
         return { state: "already_applied", expectedMarkdown: markdown };
-      const suffix = operation.markdown.replace(/^\s+/u, "");
-      if (markdown.endsWith(suffix))
+      const canonicalMarkdown = canonicalizeNotionMarkdown(markdown);
+      const suffix = canonicalizeNotionMarkdown(operation.markdown);
+      if (canonicalMarkdown.endsWith(suffix) && countOccurrences(canonicalMarkdown, suffix) === 1)
         return { state: "already_applied", expectedMarkdown: markdown };
-      if (countOccurrences(markdown, operation.markdown) > 0) {
+      if (countOccurrences(canonicalMarkdown, suffix) > 0) {
         return { state: "conflict", reason: "requested_content_already_exists_elsewhere" };
       }
       return {
@@ -120,12 +124,13 @@ export function planEdit(markdown: string, operation: PublishOperation): EditPla
     }
     case "prepend": {
       const expectedMarkdown = join(operation.markdown, markdown);
-      if (expectedMarkdown === markdown)
+      if (notionMarkdownEquivalent(expectedMarkdown, markdown))
         return { state: "already_applied", expectedMarkdown: markdown };
-      const prefix = operation.markdown.replace(/\s+$/u, "");
-      if (markdown.startsWith(prefix))
+      const canonicalMarkdown = canonicalizeNotionMarkdown(markdown);
+      const prefix = canonicalizeNotionMarkdown(operation.markdown);
+      if (canonicalMarkdown.startsWith(prefix) && countOccurrences(canonicalMarkdown, prefix) === 1)
         return { state: "already_applied", expectedMarkdown: markdown };
-      if (countOccurrences(markdown, operation.markdown) > 0) {
+      if (countOccurrences(canonicalMarkdown, prefix) > 0) {
         return { state: "conflict", reason: "requested_content_already_exists_elsewhere" };
       }
       return {
@@ -166,7 +171,7 @@ export function planEdit(markdown: string, operation: PublishOperation): EditPla
       return targetedPlan(markdown, operation.old_text, operation.new_text, operation.new_text);
     }
     case "replace_document":
-      if (markdown === operation.markdown) {
+      if (notionMarkdownEquivalent(markdown, operation.markdown)) {
         return { state: "already_applied", expectedMarkdown: markdown };
       }
       return {
@@ -194,23 +199,29 @@ export function verifyEdit(
   operation: PublishOperation,
   plan: Extract<EditPlan, { state: "ready" }>,
 ): boolean {
-  if (after === plan.expectedMarkdown) return true;
+  if (notionMarkdownEquivalent(after, plan.expectedMarkdown)) return true;
   if (operation.type === "replace_document") return false;
 
+  const canonicalBefore = canonicalizeNotionMarkdown(before);
+  const canonicalAfter = canonicalizeNotionMarkdown(after);
+
   if (operation.type === "append") {
-    const suffix = operation.markdown.replace(/^\s+/u, "");
-    if (!after.endsWith(suffix) || countOccurrences(after, operation.markdown) !== 1) return false;
-    return isSubsequence(before, after.slice(0, -suffix.length));
+    const suffix = canonicalizeNotionMarkdown(operation.markdown);
+    if (!canonicalAfter.endsWith(suffix) || countOccurrences(canonicalAfter, suffix) !== 1)
+      return false;
+    return isSubsequence(canonicalBefore, canonicalAfter.slice(0, -suffix.length));
   }
   if (operation.type === "prepend") {
-    const prefix = operation.markdown.replace(/\s+$/u, "");
-    if (!after.startsWith(prefix) || countOccurrences(after, operation.markdown) !== 1)
+    const prefix = canonicalizeNotionMarkdown(operation.markdown);
+    if (!canonicalAfter.startsWith(prefix) || countOccurrences(canonicalAfter, prefix) !== 1)
       return false;
-    return isSubsequence(before, after.slice(prefix.length));
+    return isSubsequence(canonicalBefore, canonicalAfter.slice(prefix.length));
   }
 
   if (!plan.oldFragment || plan.newFragment === undefined) return false;
-  if (countOccurrences(after, plan.newFragment) !== 1) return false;
-  const reverted = after.replace(plan.newFragment, plan.oldFragment);
-  return isSubsequence(before, reverted);
+  const oldFragment = canonicalizeNotionMarkdown(plan.oldFragment);
+  const newFragment = canonicalizeNotionMarkdown(plan.newFragment);
+  if (countOccurrences(canonicalAfter, newFragment) !== 1) return false;
+  const reverted = canonicalAfter.replace(newFragment, oldFragment);
+  return isSubsequence(canonicalBefore, reverted);
 }

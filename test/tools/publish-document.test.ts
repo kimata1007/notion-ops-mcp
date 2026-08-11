@@ -48,6 +48,20 @@ describe("notion_publish_document", () => {
     expect(fake.calls.map((call) => call.name)).toEqual(["notion-create-pages", "notion-fetch"]);
   });
 
+  it("creates a private workspace page when parent is omitted", async () => {
+    const fake = new FakeNotionMcp();
+    const { publish } = services(fake);
+
+    const result = await publish.execute({
+      target: { type: "create", title: "Private acceptance page" },
+      markdown: "# Private acceptance page\n\nSafe test content.",
+    });
+
+    expect(result).toMatchObject({ status: "success", created: true, verification: "verified" });
+    expect(fake.calls[0]).toMatchObject({ name: "notion-create-pages" });
+    expect(fake.calls[0]?.arguments).not.toHaveProperty("parent");
+  });
+
   it("returns an explicit create dry-run without authenticating or writing", async () => {
     const fake = new FakeNotionMcp();
     const { publish } = services(fake);
@@ -66,6 +80,31 @@ describe("notion_publish_document", () => {
       plan: { operation: "create", added_bytes: 12, removed_bytes: 0 },
     });
     expect(fake.calls).toHaveLength(0);
+  });
+
+  it("infers existing target and parent selector types", async () => {
+    const fake = new FakeNotionMcp();
+    const page = fake.addPage({ title: "Doc", markdown: "body" });
+    const { publish } = services(fake);
+
+    const updated = await publish.execute({
+      target: { page_id: page.id },
+      operation: { type: "append", markdown: "tail" },
+      dry_run: true,
+    });
+    const created = await publish.execute({
+      target: {
+        type: "create",
+        parent: { page_id: PARENT_ID },
+        title: "Preview",
+      },
+      markdown: "body",
+      dry_run: true,
+    });
+
+    expect(updated.status).toBe("dry_run");
+    expect(created.status).toBe("dry_run");
+    expect(fake.calls.map((call) => call.name)).toEqual(["notion-fetch"]);
   });
 
   it("creates multiple pages in one upstream write and verifies each page", async () => {
@@ -96,6 +135,22 @@ describe("notion_publish_document", () => {
       "notion-fetch",
     ]);
     expect(fake.calls[0]?.arguments["pages"]).toHaveLength(2);
+  });
+
+  it("creates multiple private workspace pages when parent is omitted", async () => {
+    const fake = new FakeNotionMcp();
+    const { publish } = services(fake);
+
+    const result = await publish.execute({
+      target: { type: "create_batch" },
+      pages: [
+        { title: "Private A", markdown: "Alpha" },
+        { title: "Private B", markdown: "Beta" },
+      ],
+    });
+
+    expect(result).toMatchObject({ status: "success", created_count: 2, verified_count: 2 });
+    expect(fake.calls[0]?.arguments).not.toHaveProperty("parent");
   });
 
   it("returns a batch create dry-run without authenticating or writing", async () => {
@@ -211,6 +266,27 @@ describe("notion_publish_document", () => {
 
     expect(result.status).toBe("ambiguous");
     expect(fake.calls.map((call) => call.name)).toEqual(["notion-search"]);
+  });
+
+  it("updates one exact title without guessing among fuzzy search candidates", async () => {
+    const fake = new FakeNotionMcp();
+    const exact = fake.addPage({ title: "Release plan", markdown: "Current" });
+    fake.addPage({ title: "Release plan archive", markdown: "Archived" });
+    const { publish } = services(fake);
+
+    const result = await publish.execute({
+      target: { query: "Release plan" },
+      operation: { type: "append", markdown: "Approved" },
+    });
+
+    expect(result).toMatchObject({ status: "success", verification: "verified" });
+    expect(fake.pages.get(exact.id)?.markdown).toContain("Approved");
+    expect(fake.calls.map((call) => call.name)).toEqual([
+      "notion-search",
+      "notion-fetch",
+      "notion-update-page",
+      "notion-fetch",
+    ]);
   });
 
   it("reports already_applied and does not duplicate an append", async () => {

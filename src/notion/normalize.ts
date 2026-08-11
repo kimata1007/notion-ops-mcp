@@ -96,6 +96,19 @@ export function normalizeSearchResult(
   return candidates;
 }
 
+function normalizedTitle(value: string): string {
+  return value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
+}
+
+export function preferExactTitleMatches(
+  candidates: SearchCandidate[],
+  query: string,
+): SearchCandidate[] {
+  const expected = normalizedTitle(query);
+  const exact = candidates.filter((candidate) => normalizedTitle(candidate.title) === expected);
+  return exact.length > 0 ? exact : candidates;
+}
+
 export function normalizeFetchResult(value: unknown): PageSnapshot {
   const root = record(value);
   if (!root) throw new OpsError("upstream_incompatible", "Notion fetch result is not an object");

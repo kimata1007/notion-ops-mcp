@@ -33,7 +33,6 @@ async function abortableDelay(milliseconds: number, signal: AbortSignal): Promis
   if (milliseconds <= 0) return;
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(resolve, milliseconds);
-    timer.unref();
     signal.addEventListener(
       "abort",
       () => {

@@ -42,6 +42,27 @@ describe("notion_read_document", () => {
     expect(fake.calls.map((call) => call.name)).toEqual(["notion-fetch"]);
   });
 
+  it("infers a page ID selector type when the model omits it", async () => {
+    const fake = new FakeNotionMcp();
+    const page = fake.addPage({ title: "Runbook", markdown: "Safe steps" });
+
+    const result = await service(fake).execute({ source: { page_id: page.id } });
+
+    expect(result.status).toBe("success");
+    expect(fake.calls.map((call) => call.name)).toEqual(["notion-fetch"]);
+  });
+
+  it("rejects a selector whose explicit type conflicts with its key", async () => {
+    const fake = new FakeNotionMcp();
+
+    const result = await service(fake).execute({
+      source: { type: "url", page_id: "11111111-1111-4111-8111-111111111111" },
+    });
+
+    expect(result).toMatchObject({ status: "failed", reason: "invalid_input" });
+    expect(fake.calls).toHaveLength(0);
+  });
+
   it("combines a unique search and fetch in one operation", async () => {
     const fake = new FakeNotionMcp();
     const page = fake.addPage({ title: "Unique handbook", markdown: "Welcome" });
@@ -54,6 +75,18 @@ describe("notion_read_document", () => {
     expect(result.summary.upstream_tool_calls).toBe(2);
     expect(fake.calls.map((call) => call.name)).toEqual(["notion-search", "notion-fetch"]);
     if (result.status === "success") expect(result.page.id).toBe(page.id);
+  });
+
+  it("prefers one exact title over additional fuzzy search candidates", async () => {
+    const fake = new FakeNotionMcp();
+    const exact = fake.addPage({ title: "Release plan", markdown: "Current" });
+    fake.addPage({ title: "Release plan archive", markdown: "Archived" });
+
+    const result = await service(fake).execute({ source: { query: "Release plan" } });
+
+    expect(result.status).toBe("success");
+    if (result.status === "success") expect(result.page.id).toBe(exact.id);
+    expect(fake.calls.map((call) => call.name)).toEqual(["notion-search", "notion-fetch"]);
   });
 
   it("does not fetch or guess when search is ambiguous", async () => {

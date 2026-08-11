@@ -78,6 +78,8 @@ and `.github/workflows/release.yml`.
 
 If npm publication fails, do not create a replacement tag manually. Fix the
 workflow or trusted-publisher configuration, then re-run the failed `Publish npm
-package` job. If npm publication succeeded but artifact attachment failed, only
-the failed attachment step needs to be retried; `--clobber` makes the GitHub
-Release upload repeatable.
+package` job. A retry first compares the registry SRI with the locally packed
+artifact and skips an already completed identical publication. If npm publication
+succeeded but artifact attachment failed, re-run only the failed `Attach published
+package to GitHub Release` job. It downloads the immutable registry tarball,
+verifies the pre-publication SHA-256, and uploads with `--clobber`.

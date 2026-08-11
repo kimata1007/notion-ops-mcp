@@ -25,7 +25,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
     steps:
       - id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
 
   publish:
     name: Publish npm package
@@ -35,15 +35,18 @@ jobs:
     timeout-minutes: 15
     environment: npm
     permissions:
-      contents: write
+      contents: read
       id-token: write
+    outputs:
+      package_name: ${{ steps.metadata.outputs.name }}
+      package_sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.release.outputs.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -57,14 +60,17 @@ jobs:
       - run: npm run build
 
       - name: Verify release version
+        id: metadata
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
         run: >-
           node --input-type=module -e
           'import pkg from "./package.json" with { type: "json" };
-          if (pkg.version !== process.env.RELEASE_VERSION) {
-            throw new Error(`package.json ${pkg.version} does not match release ${process.env.RELEASE_VERSION}`);
-          }'
+          import { PACKAGE_VERSION } from "./dist/package.js";
+          if (pkg.version !== process.env.RELEASE_VERSION || PACKAGE_VERSION !== pkg.version) {
+            throw new Error(`release ${process.env.RELEASE_VERSION}, package.json ${pkg.version}, MCP ${PACKAGE_VERSION} must match`);
+          }
+          process.stdout.write(`name=${pkg.name}\n`);' >> "$GITHUB_OUTPUT"
 
       - name: Pack release artifact
         id: pack
@@ -75,13 +81,65 @@ jobs:
           test -f "$package_file"
           sha256sum "$package_file" > "$package_file.sha256"
           echo "file=$package_file" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(cut -d ' ' -f 1 < "$package_file.sha256")" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test the isolated package artifact
+        run: npm run smoke:package -- "${{ steps.pack.outputs.file }}"
 
       - name: Publish exact artifact to npm
-        run: npm publish "${{ steps.pack.outputs.file }}" --access public
+        env:
+          PACKAGE_FILE: ${{ steps.pack.outputs.file }}
+          PACKAGE_NAME: ${{ steps.metadata.outputs.name }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        shell: bash
+        run: |
+          local_integrity="$(node --input-type=module -e '
+            import { createHash } from "node:crypto";
+            import { readFileSync } from "node:fs";
+            process.stdout.write(`sha512-${createHash("sha512").update(readFileSync(process.argv[1])).digest("base64")}`);
+          ' "$PACKAGE_FILE")"
+          published_integrity="$(npm view "$PACKAGE_NAME@$RELEASE_VERSION" dist.integrity 2>/dev/null || true)"
+          if [[ -n "$published_integrity" ]]; then
+            test "$published_integrity" = "$local_integrity"
+            echo "$PACKAGE_NAME@$RELEASE_VERSION is already published with the same integrity"
+          else
+            npm publish "$PACKAGE_FILE" --access public
+          fi
+
+  attach:
+    name: Attach published package to GitHub Release
+    needs: [release, publish]
+    if: ${{ needs.release.outputs.release_created == 'true' && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Download and verify the published package
+        id: download
+        env:
+          EXPECTED_SHA256: ${{ needs.publish.outputs.package_sha256 }}
+          PACKAGE_NAME: ${{ needs.publish.outputs.package_name }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        shell: bash
+        run: |
+          tarball_url="$(npm view "$PACKAGE_NAME@$RELEASE_VERSION" dist.tarball)"
+          package_file="${tarball_url##*/}"
+          curl --fail --silent --show-error --location "$tarball_url" --output "$package_file"
+          actual_sha256="$(sha256sum "$package_file" | cut -d ' ' -f 1)"
+          test "$actual_sha256" = "$EXPECTED_SHA256"
+          sha256sum "$package_file" > "$package_file.sha256"
+          echo "file=$package_file" >> "$GITHUB_OUTPUT"
 
       - name: Attach package to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.release.outputs.tag_name }}
-          PACKAGE_FILE: ${{ steps.pack.outputs.file }}
+          PACKAGE_FILE: ${{ steps.download.outputs.file }}
         run: gh release upload "$RELEASE_TAG" "$PACKAGE_FILE" "$PACKAGE_FILE.sha256" --clobber

@@ -12,10 +12,28 @@ import { normalizeNotionPageUrl, normalizePageId } from "../notion/url.js";
 const PageIdSchema = z.string().trim().transform(normalizePageId);
 const NotionUrlSchema = z.string().trim().transform(normalizeNotionPageUrl);
 
-export const ReadSourceSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("page_id"), page_id: PageIdSchema }).strict(),
-  z.object({ type: z.literal("url"), url: NotionUrlSchema }).strict(),
-  z.object({ type: z.literal("search"), query: z.string().trim().min(1).max(500) }).strict(),
+const PageIdSelectorSchema = z
+  .object({ type: z.literal("page_id").optional(), page_id: PageIdSchema })
+  .strict()
+  .transform(({ page_id }) => ({ type: "page_id" as const, page_id }));
+
+const UrlSelectorSchema = z
+  .object({ type: z.literal("url").optional(), url: NotionUrlSchema })
+  .strict()
+  .transform(({ url }) => ({ type: "url" as const, url }));
+
+const SearchSelectorSchema = z
+  .object({
+    type: z.literal("search").optional(),
+    query: z.string().trim().min(1).max(500),
+  })
+  .strict()
+  .transform(({ query }) => ({ type: "search" as const, query }));
+
+export const ReadSourceSchema = z.union([
+  PageIdSelectorSchema,
+  UrlSelectorSchema,
+  SearchSelectorSchema,
 ]);
 
 const CommonReadOptions = {
@@ -72,29 +90,26 @@ export const MarkdownSchema = z
     `Markdown must be at most ${MAX_INPUT_MARKDOWN_BYTES} UTF-8 bytes`,
   );
 
-const ExistingTargetSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("page_id"), page_id: PageIdSchema }).strict(),
-  z.object({ type: z.literal("url"), url: NotionUrlSchema }).strict(),
-  z.object({ type: z.literal("search"), query: z.string().trim().min(1).max(500) }).strict(),
-]);
+const ExistingTargetSchema = ReadSourceSchema;
 
-const ParentSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("page_id"), page_id: PageIdSchema }).strict(),
+const ParentSchema = z.union([
+  PageIdSelectorSchema,
   z
     .object({
-      type: z.literal("data_source_id"),
+      type: z.literal("data_source_id").optional(),
       data_source_id: z
         .string()
         .trim()
         .regex(/^(?:collection:\/\/)?[0-9a-f-]{32,36}$/i),
     })
-    .strict(),
+    .strict()
+    .transform(({ data_source_id }) => ({ type: "data_source_id" as const, data_source_id })),
 ]);
 
 const CreateTargetSchema = z
   .object({
     type: z.literal("create"),
-    parent: ParentSchema,
+    parent: ParentSchema.optional(),
     title: z.string().trim().min(1).max(200),
   })
   .strict();
@@ -109,7 +124,7 @@ const CreatePageSchema = z
 const BatchCreateTargetSchema = z
   .object({
     type: z.literal("create_batch"),
-    parent: ParentSchema,
+    parent: ParentSchema.optional(),
   })
   .strict();
 

@@ -25,6 +25,7 @@
     "lint": "biome lint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "smoke:package": "node scripts/smoke-packed-package.mjs",
     "typecheck": "tsc --noEmit",
     "prepack": "npm run build"
   },

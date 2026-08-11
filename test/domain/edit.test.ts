@@ -73,4 +73,16 @@ describe("deterministic edits", () => {
     expect(verifyEdit(before, "original\nuser edit\nrequested", operation, plan)).toBe(true);
     expect(verifyEdit(before, "user replaced it\nrequested", operation, plan)).toBe(false);
   });
+
+  it("recognizes and verifies append content after hosted MCP spacing normalization", () => {
+    const before = "Body";
+    const operation = { type: "append" as const, markdown: "## Footer\n\nDone" };
+    const plan = planEdit(before, operation);
+    if (plan.state !== "ready") throw new Error("expected ready plan");
+
+    expect(verifyEdit(before, "Body\n## Footer\nDone", operation, plan)).toBe(true);
+    expect(planEdit("Body\n## Footer\nDone", operation)).toMatchObject({
+      state: "already_applied",
+    });
+  });
 });

@@ -7,6 +7,9 @@ import { promisify } from "node:util";
 
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
+import { SERVER_INSTRUCTIONS } from "../src/server.js";
+import packageMetadata from "../package.json" with { type: "json" };
+
 const execFileAsync = promisify(execFile);
 const children: ChildProcessWithoutNullStreams[] = [];
 const temporaryRoots: string[] = [];
@@ -90,6 +93,11 @@ describe("stdio transport", () => {
     });
     const initialized = await waitFor(1);
     expect(initialized.error).toBeUndefined();
+    expect(initialized.result?.["instructions"]).toBe(SERVER_INSTRUCTIONS);
+    expect(initialized.result?.["serverInfo"]).toMatchObject({
+      name: packageMetadata.name,
+      version: packageMetadata.version,
+    });
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
     );
@@ -99,6 +107,7 @@ describe("stdio transport", () => {
     const tools = listed.result?.["tools"] as Array<{
       name: string;
       inputSchema: { properties?: Record<string, unknown> };
+      outputSchema?: { properties?: Record<string, unknown> };
     }>;
     expect(tools.map((tool) => tool.name)).toEqual([
       "notion_read_document",
@@ -110,6 +119,11 @@ describe("stdio transport", () => {
     expect(Object.keys(tools[1]?.inputSchema.properties ?? {})).toEqual(
       expect.arrayContaining(["target", "operation", "operations", "markdown", "pages"]),
     );
+    for (const tool of tools) {
+      expect(Object.keys(tool.outputSchema?.properties ?? {})).toEqual(
+        expect.arrayContaining(["status", "summary"]),
+      );
+    }
 
     request(3, "tools/call", { name: "notion_read_document", arguments: {} });
     const called = await waitFor(3);
@@ -178,7 +192,13 @@ describe("stdio transport", () => {
       capabilities: {},
       clientInfo: { name: "packed-stdio-test", version: "1.0.0" },
     });
-    await expect(waitFor(1)).resolves.toMatchObject({ id: 1 });
+    await expect(waitFor(1)).resolves.toMatchObject({
+      id: 1,
+      result: {
+        instructions: SERVER_INSTRUCTIONS,
+        serverInfo: { name: packageMetadata.name, version: packageMetadata.version },
+      },
+    });
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
     );
