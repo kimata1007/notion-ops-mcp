@@ -60,6 +60,9 @@ describe("notion-ops MCP server", () => {
       ?.inputSchema as { properties?: Record<string, unknown> };
     const publishSchema = listed.tools.find((tool) => tool.name === "notion_publish_document")
       ?.inputSchema as { properties?: Record<string, unknown> };
+    const outputSchemas = listed.tools.map(
+      (tool) => tool.outputSchema as { properties?: Record<string, unknown> },
+    );
     expect(Object.keys(readSchema.properties ?? {})).toEqual(
       expect.arrayContaining(["source", "sources", "max_output_bytes", "timeout_ms"]),
     );
@@ -88,6 +91,11 @@ describe("notion-ops MCP server", () => {
     expect(publishSchema.properties?.["operation"]).toMatchObject({
       anyOf: expect.any(Array),
     });
+    for (const outputSchema of outputSchemas) {
+      expect(Object.keys(outputSchema.properties ?? {})).toEqual(
+        expect.arrayContaining(["status", "summary"]),
+      );
+    }
 
     const result = await client.callTool({
       name: "notion_read_document",
@@ -104,7 +112,10 @@ describe("notion-ops MCP server", () => {
         }),
       },
     ]);
-    expect(result.structuredContent).toBeUndefined();
+    expect(result.structuredContent).toEqual({
+      status: "not_found",
+      summary: { operation: "read", upstream_tool_calls: 1, retries: 0, wall_time_ms: 3 },
+    });
     expect(readDocument).toHaveBeenCalledOnce();
     expect(readDocument.mock.calls[0]?.[0]).toEqual({
       source: {

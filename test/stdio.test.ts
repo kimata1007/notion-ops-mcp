@@ -107,6 +107,7 @@ describe("stdio transport", () => {
     const tools = listed.result?.["tools"] as Array<{
       name: string;
       inputSchema: { properties?: Record<string, unknown> };
+      outputSchema?: { properties?: Record<string, unknown> };
     }>;
     expect(tools.map((tool) => tool.name)).toEqual([
       "notion_read_document",
@@ -118,6 +119,11 @@ describe("stdio transport", () => {
     expect(Object.keys(tools[1]?.inputSchema.properties ?? {})).toEqual(
       expect.arrayContaining(["target", "operation", "operations", "markdown", "pages"]),
     );
+    for (const tool of tools) {
+      expect(Object.keys(tool.outputSchema?.properties ?? {})).toEqual(
+        expect.arrayContaining(["status", "summary"]),
+      );
+    }
 
     request(3, "tools/call", { name: "notion_read_document", arguments: {} });
     const called = await waitFor(3);

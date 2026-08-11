@@ -118,6 +118,10 @@ try {
     if (Object.keys(tool.inputSchema?.properties ?? {}).length === 0) {
       throw new Error(`${tool.name} published an empty input schema`);
     }
+    const outputProperties = Object.keys(tool.outputSchema?.properties ?? {});
+    if (!outputProperties.includes("status") || !outputProperties.includes("summary")) {
+      throw new Error(`${tool.name} published an incomplete output schema`);
+    }
   }
 
   process.stdout.write(

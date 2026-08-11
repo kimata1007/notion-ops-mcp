@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 
 import type { SafeLogger } from "./logger.js";
 import { PACKAGE_NAME, PACKAGE_VERSION } from "./package.js";
@@ -15,9 +16,24 @@ export interface NotionOpsServices {
   publishDocument: Pick<PublishDocumentService, "execute">;
 }
 
+const CompositeToolOutputSchema = z
+  .object({
+    status: z.string(),
+    summary: z
+      .object({
+        operation: z.enum(["read", "publish"]),
+        upstream_tool_calls: z.number().int().nonnegative(),
+        retries: z.number().int().nonnegative(),
+        wall_time_ms: z.number().int().nonnegative(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
 function compactResult(result: ReadDocumentResult | PublishDocumentResult): CallToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(result) }],
+    structuredContent: result as unknown as Record<string, unknown>,
   };
 }
 
@@ -49,6 +65,7 @@ export function createNotionOpsServer(services: NotionOpsServices, logger?: Safe
       description:
         "Resolve and fetch one or up to eight Notion pages by page_id, url, or unambiguous query, returning Markdown and revisions in one model-facing operation. Selector type is optional when its key is unambiguous.",
       inputSchema: ReadDocumentToolInputSchema,
+      outputSchema: CompositeToolOutputSchema,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -70,6 +87,7 @@ export function createNotionOpsServer(services: NotionOpsServices, logger?: Safe
       description:
         "Create one or more Notion documents, or conflict-safely apply one or more edits to a document with bounded rebasing and post-write verification in one model-facing operation. Selector type is optional when its key is unambiguous.",
       inputSchema: PublishDocumentToolInputSchema,
+      outputSchema: CompositeToolOutputSchema,
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
