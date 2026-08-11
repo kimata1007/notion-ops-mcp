@@ -3,7 +3,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SafeLogger } from "../src/logger.js";
-import { createNotionOpsServer } from "../src/server.js";
+import { createNotionOpsServer, SERVER_INSTRUCTIONS } from "../src/server.js";
 
 const closeables: Array<{ close(): Promise<void> }> = [];
 
@@ -15,7 +15,7 @@ describe("notion-ops MCP server", () => {
   it("initializes, exposes only two composite tools, and returns one compact result", async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const logs: string[] = [];
-    const readDocument = vi.fn(async () => ({
+    const readDocument = vi.fn(async (_input: unknown, _signal?: AbortSignal) => ({
       status: "not_found" as const,
       summary: {
         operation: "read" as const,
@@ -24,7 +24,7 @@ describe("notion-ops MCP server", () => {
         wall_time_ms: 3,
       },
     }));
-    const publishDocument = vi.fn(async () => ({
+    const publishDocument = vi.fn(async (_input: unknown, _signal?: AbortSignal) => ({
       status: "not_found" as const,
       summary: {
         operation: "publish" as const,
@@ -49,6 +49,8 @@ describe("notion-ops MCP server", () => {
     closeables.push(server, client);
 
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    expect(client.getInstructions()).toBe(SERVER_INSTRUCTIONS);
+    expect(client.getInstructions()?.slice(0, 512)).toContain("instead of raw Notion tools");
     const listed = await client.listTools();
     expect(listed.tools.map((tool) => tool.name)).toEqual([
       "notion_read_document",
@@ -75,6 +77,13 @@ describe("notion-ops MCP server", () => {
       ]),
     );
     expect(readSchema.properties?.["source"]).toMatchObject({ anyOf: expect.any(Array) });
+    const sourceAlternatives = (
+      readSchema.properties?.["source"] as { anyOf?: Array<{ required?: string[] }> }
+    ).anyOf;
+    expect(sourceAlternatives).toHaveLength(3);
+    expect(
+      sourceAlternatives?.every((alternative) => !alternative.required?.includes("type")),
+    ).toBe(true);
     expect(publishSchema.properties?.["target"]).toMatchObject({ anyOf: expect.any(Array) });
     expect(publishSchema.properties?.["operation"]).toMatchObject({
       anyOf: expect.any(Array),
@@ -82,7 +91,9 @@ describe("notion-ops MCP server", () => {
 
     const result = await client.callTool({
       name: "notion_read_document",
-      arguments: { source: { type: "search", query: "missing" } },
+      arguments: {
+        source: { page_id: "11111111-1111-4111-8111-111111111111" },
+      },
     });
     expect(result.content).toEqual([
       {
@@ -95,12 +106,17 @@ describe("notion-ops MCP server", () => {
     ]);
     expect(result.structuredContent).toBeUndefined();
     expect(readDocument).toHaveBeenCalledOnce();
+    expect(readDocument.mock.calls[0]?.[0]).toEqual({
+      source: {
+        type: "page_id",
+        page_id: "11111111-1111-4111-8111-111111111111",
+      },
+    });
 
     const published = await client.callTool({
       name: "notion_publish_document",
       arguments: {
         target: {
-          type: "page_id",
           page_id: "11111111-1111-4111-8111-111111111111",
         },
         operation: { type: "append", markdown: "requested" },
@@ -108,6 +124,13 @@ describe("notion-ops MCP server", () => {
     });
     expect(published.isError).not.toBe(true);
     expect(publishDocument).toHaveBeenCalledOnce();
+    expect(publishDocument.mock.calls[0]?.[0]).toEqual({
+      target: {
+        type: "page_id",
+        page_id: "11111111-1111-4111-8111-111111111111",
+      },
+      operation: { type: "append", markdown: "requested" },
+    });
     expect(logs).toHaveLength(2);
     expect(logs.join("\n")).not.toContain("missing");
     expect(logs.join("\n")).not.toContain("requested");

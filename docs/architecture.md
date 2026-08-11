@@ -10,6 +10,10 @@
 
 ## コンポーネント境界
 
+初期化レスポンスの `instructions` は、Codexなどのクライアントへ、上流の生Toolではなく
+二つの複合Toolを使うこと、selectorの省略規則、競合時の停止条件、バッチ化方針を伝える。
+重要なルーティング指示は先頭512文字以内に置く。
+
 ```text
 stdio MCP server
   -> strict input schemas

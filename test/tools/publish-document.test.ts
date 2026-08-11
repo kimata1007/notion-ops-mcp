@@ -68,6 +68,31 @@ describe("notion_publish_document", () => {
     expect(fake.calls).toHaveLength(0);
   });
 
+  it("infers existing target and parent selector types", async () => {
+    const fake = new FakeNotionMcp();
+    const page = fake.addPage({ title: "Doc", markdown: "body" });
+    const { publish } = services(fake);
+
+    const updated = await publish.execute({
+      target: { page_id: page.id },
+      operation: { type: "append", markdown: "tail" },
+      dry_run: true,
+    });
+    const created = await publish.execute({
+      target: {
+        type: "create",
+        parent: { page_id: PARENT_ID },
+        title: "Preview",
+      },
+      markdown: "body",
+      dry_run: true,
+    });
+
+    expect(updated.status).toBe("dry_run");
+    expect(created.status).toBe("dry_run");
+    expect(fake.calls.map((call) => call.name)).toEqual(["notion-fetch"]);
+  });
+
   it("creates multiple pages in one upstream write and verifies each page", async () => {
     const fake = new FakeNotionMcp();
     const { publish } = services(fake);

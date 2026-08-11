@@ -42,6 +42,27 @@ describe("notion_read_document", () => {
     expect(fake.calls.map((call) => call.name)).toEqual(["notion-fetch"]);
   });
 
+  it("infers a page ID selector type when the model omits it", async () => {
+    const fake = new FakeNotionMcp();
+    const page = fake.addPage({ title: "Runbook", markdown: "Safe steps" });
+
+    const result = await service(fake).execute({ source: { page_id: page.id } });
+
+    expect(result.status).toBe("success");
+    expect(fake.calls.map((call) => call.name)).toEqual(["notion-fetch"]);
+  });
+
+  it("rejects a selector whose explicit type conflicts with its key", async () => {
+    const fake = new FakeNotionMcp();
+
+    const result = await service(fake).execute({
+      source: { type: "url", page_id: "11111111-1111-4111-8111-111111111111" },
+    });
+
+    expect(result).toMatchObject({ status: "failed", reason: "invalid_input" });
+    expect(fake.calls).toHaveLength(0);
+  });
+
   it("combines a unique search and fetch in one operation", async () => {
     const fake = new FakeNotionMcp();
     const page = fake.addPage({ title: "Unique handbook", markdown: "Welcome" });

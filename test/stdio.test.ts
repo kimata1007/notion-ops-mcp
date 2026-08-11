@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
+import { SERVER_INSTRUCTIONS } from "../src/server.js";
+
 const execFileAsync = promisify(execFile);
 const children: ChildProcessWithoutNullStreams[] = [];
 const temporaryRoots: string[] = [];
@@ -90,6 +92,7 @@ describe("stdio transport", () => {
     });
     const initialized = await waitFor(1);
     expect(initialized.error).toBeUndefined();
+    expect(initialized.result?.["instructions"]).toBe(SERVER_INSTRUCTIONS);
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
     );
@@ -178,7 +181,10 @@ describe("stdio transport", () => {
       capabilities: {},
       clientInfo: { name: "packed-stdio-test", version: "1.0.0" },
     });
-    await expect(waitFor(1)).resolves.toMatchObject({ id: 1 });
+    await expect(waitFor(1)).resolves.toMatchObject({
+      id: 1,
+      result: { instructions: SERVER_INSTRUCTIONS },
+    });
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
     );

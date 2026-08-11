@@ -7,6 +7,9 @@ import type { PublishDocumentResult, PublishDocumentService } from "./tools/publ
 import type { ReadDocumentResult, ReadDocumentService } from "./tools/read-document.js";
 import { PublishDocumentToolInputSchema, ReadDocumentToolInputSchema } from "./tools/schemas.js";
 
+export const SERVER_INSTRUCTIONS =
+  "Use this server's notion_read_document and notion_publish_document tools for Notion page operations instead of raw Notion tools or a generic Notion plugin. Each tool completes target resolution and its dependent upstream calls without returning control to the model. For page selectors, pass exactly one of page_id, url, or query; type is optional and inferred. Read before updates and pass the returned base_revision when concurrent edits matter. Never guess among ambiguous search results. Batch independent work whenever possible.";
+
 export interface NotionOpsServices {
   readDocument: Pick<ReadDocumentService, "execute">;
   publishDocument: Pick<PublishDocumentService, "execute">;
@@ -34,14 +37,17 @@ function logCompletion(
 }
 
 export function createNotionOpsServer(services: NotionOpsServices, logger?: SafeLogger): McpServer {
-  const server = new McpServer({ name: PACKAGE_NAME, version: PACKAGE_VERSION });
+  const server = new McpServer(
+    { name: PACKAGE_NAME, version: PACKAGE_VERSION },
+    { instructions: SERVER_INSTRUCTIONS },
+  );
 
   server.registerTool(
     "notion_read_document",
     {
       title: "Read Notion document",
       description:
-        "Resolve and fetch one or up to eight Notion pages by ID, URL, or unambiguous search, returning Markdown and revisions in one operation.",
+        "Resolve and fetch one or up to eight Notion pages by page_id, url, or unambiguous query, returning Markdown and revisions in one model-facing operation. Selector type is optional when its key is unambiguous.",
       inputSchema: ReadDocumentToolInputSchema,
       annotations: {
         readOnlyHint: true,
@@ -62,7 +68,7 @@ export function createNotionOpsServer(services: NotionOpsServices, logger?: Safe
     {
       title: "Publish Notion document",
       description:
-        "Create one or more Notion documents, or conflict-safely apply one or more edits to a document with bounded rebasing and post-write verification.",
+        "Create one or more Notion documents, or conflict-safely apply one or more edits to a document with bounded rebasing and post-write verification in one model-facing operation. Selector type is optional when its key is unambiguous.",
       inputSchema: PublishDocumentToolInputSchema,
       annotations: {
         readOnlyHint: false,

@@ -17,8 +17,16 @@
 Codex:
 
 ```bash
-codex mcp add notion-ops -- npx -y notion-ops-mcp
+codex mcp add notion_ops -- npx -y notion-ops-mcp
 ```
+
+`notion_ops` という固定名にすると、Codex 内部の完全修飾 Tool 名も安定します。初回の
+`npx` 取得が10秒を超える環境では、`~/.codex/config.toml` の
+`[mcp_servers.notion_ops]` に `startup_timeout_sec = 30` と `required = true` を追加してください。
+セッション開始後は `/mcp` で接続状態を確認できます。Codex が同名のNotionプラグインを
+選ぼうとする場合は、最初の依頼で
+`mcp__notion_ops__notion_read_document` または
+`mcp__notion_ops__notion_publish_document` を明示すると確実です。
 
 Claude Code:
 
@@ -72,7 +80,7 @@ OAuth 資格情報は所有者だけが読めるファイルへ原子的に保�
 
 成功時の revision は `last_edited_time` と本文の SHA-256 を含み、本文そのものは含みません。返却本文は既定64 KiBまでで、切り詰め時は `truncated` と `original_bytes` を返します。
 
-最大8文書をまとめて読む場合は、`source` の代わりに `sources` を指定します。結果順は入力順を保ち、文書ごとの成功・失敗と集計を一度に返します。`max_output_bytes` はバッチ全体の上限です。
+最大8文書をまとめて読む場合は、`source` の代わりに `sources` を指定します。結果順は入力順を保ち、文書ごとの成功・失敗と集計を一度に返します。`max_output_bytes` はバッチ全体の上限です。`page_id`、`url`、`query` のキーが一意なら selector の `type` は省略できます。明示形式も後方互換のため引き続き利用できます。
 
 ```json
 {
