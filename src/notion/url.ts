@@ -1,6 +1,12 @@
 import { OpsError } from "../errors.js";
 
-const NOTION_HOSTS = new Set(["notion.so", "www.notion.so", "notion.com", "www.notion.com"]);
+const NOTION_HOSTS = new Set([
+  "notion.so",
+  "www.notion.so",
+  "notion.com",
+  "www.notion.com",
+  "app.notion.com",
+]);
 const PAGE_ID = /(?:^|[-/])([0-9a-f]{32})(?:$|[/?#])/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const COMPACT_ID = /^[0-9a-f]{32}$/i;

@@ -42,6 +42,9 @@ describe("Notion normalization", () => {
         "https://notion.com/workspace/Project-30702dc59a3b8106b51bed6d1bfeeed4?pvs=4",
       ),
     ).toContain("notion.com/workspace/Project-");
+    expect(
+      normalizeNotionPageUrl("https://app.notion.com/p/30702dc59a3b8106b51bed6d1bfeeed4?pvs=204"),
+    ).toContain("app.notion.com/p/");
     expect(() =>
       normalizeNotionPageUrl(
         "https://evil.example/workspace/Project-30702dc59a3b8106b51bed6d1bfeeed4",
