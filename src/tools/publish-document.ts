@@ -224,7 +224,6 @@ function asyncTaskFrom(value: unknown): Record<string, unknown> | undefined {
 async function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(resolve, milliseconds);
-    timer.unref();
     signal.addEventListener(
       "abort",
       () => {
