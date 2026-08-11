@@ -26,7 +26,16 @@ After a release is created, Release Please changes the PR label to
 `autorelease: tagged`. The npm publication job is the source of truth for whether
 the package was actually published.
 
-## One-time npm setup
+## One-time setup
+
+### GitHub
+
+Before the first run, open the repository's **Settings → Actions → General**
+page and enable **Allow GitHub Actions to create and approve pull requests**.
+Release Please cannot create its release PR while this repository setting is
+disabled.
+
+### npm
 
 The npm package must trust this GitHub Actions workflow before its first
 automated publication. Configure the trusted publisher for `notion-ops-mcp`
