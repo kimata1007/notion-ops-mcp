@@ -30,8 +30,8 @@ ID/URL は検索せず取得する。検索は候補がちょうど一件の場�
 `target` は次の union である。
 
 - 既存: page ID、Notion URL、または検索条件
-- 新規: 明示した `parent`（page/data source）、`title`
-- 複数新規: `type: "create_batch"`、共通の `parent`、1〜8件の `pages[{ title, markdown }]`
+- 新規: `title` と任意の `parent`（page/data source）。`parent` を省略するとプライベートページとして作成
+- 複数新規: `type: "create_batch"`、任意の共通 `parent`、1〜8件の `pages[{ title, markdown }]`
 
 検索候補が一件でなければ書き込まない。既存ページに対する `operation` は次の union である。
 

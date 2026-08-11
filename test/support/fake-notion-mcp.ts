@@ -142,7 +142,7 @@ export class FakeNotionMcp {
         {
           inputSchema: z
             .object({
-              parent: z.record(z.string(), z.string()),
+              parent: z.record(z.string(), z.string()).optional(),
               pages: z.array(
                 z
                   .object({
@@ -156,7 +156,11 @@ export class FakeNotionMcp {
             .strict(),
         },
         async ({ parent, pages, allow_async }) => {
-          const error = await this.#record("notion-create-pages", { parent, pages, allow_async });
+          const error = await this.#record("notion-create-pages", {
+            ...(parent ? { parent } : {}),
+            pages,
+            allow_async,
+          });
           if (error) return jsonResult(error, true);
           const created = pages.map((input) =>
             this.addPage({

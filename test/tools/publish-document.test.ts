@@ -48,6 +48,20 @@ describe("notion_publish_document", () => {
     expect(fake.calls.map((call) => call.name)).toEqual(["notion-create-pages", "notion-fetch"]);
   });
 
+  it("creates a private workspace page when parent is omitted", async () => {
+    const fake = new FakeNotionMcp();
+    const { publish } = services(fake);
+
+    const result = await publish.execute({
+      target: { type: "create", title: "Private acceptance page" },
+      markdown: "# Private acceptance page\n\nSafe test content.",
+    });
+
+    expect(result).toMatchObject({ status: "success", created: true, verification: "verified" });
+    expect(fake.calls[0]).toMatchObject({ name: "notion-create-pages" });
+    expect(fake.calls[0]?.arguments).not.toHaveProperty("parent");
+  });
+
   it("returns an explicit create dry-run without authenticating or writing", async () => {
     const fake = new FakeNotionMcp();
     const { publish } = services(fake);
@@ -121,6 +135,22 @@ describe("notion_publish_document", () => {
       "notion-fetch",
     ]);
     expect(fake.calls[0]?.arguments["pages"]).toHaveLength(2);
+  });
+
+  it("creates multiple private workspace pages when parent is omitted", async () => {
+    const fake = new FakeNotionMcp();
+    const { publish } = services(fake);
+
+    const result = await publish.execute({
+      target: { type: "create_batch" },
+      pages: [
+        { title: "Private A", markdown: "Alpha" },
+        { title: "Private B", markdown: "Beta" },
+      ],
+    });
+
+    expect(result).toMatchObject({ status: "success", created_count: 2, verified_count: 2 });
+    expect(fake.calls[0]?.arguments).not.toHaveProperty("parent");
   });
 
   it("returns a batch create dry-run without authenticating or writing", async () => {

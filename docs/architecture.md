@@ -45,7 +45,7 @@ read/publish service 境界で strict union を再検証する。公開 schema �
 | --- | --- | --- |
 | 検索 | `notion-search` | `query` |
 | 取得 | `notion-fetch` | `id`（ページ ID または URL） |
-| 作成 | `notion-create-pages` | `parent`, `pages[].properties.title`, `pages[].content` |
+| 作成 | `notion-create-pages` | 任意の `parent`, `pages[].properties.title`, `pages[].content` |
 | 更新 | `notion-update-page` | `page_id`, `command`, command 固有の平坦な引数 |
 | 非同期確認 | `notion-get-async-task` | `task_id` |
 

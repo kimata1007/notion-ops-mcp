@@ -104,7 +104,7 @@ export type PublishDocumentResult =
       plan: {
         operation: ExecutedOperation;
         target?: { id?: string; url?: string; title?: string; parent?: JsonObject };
-        targets?: Array<{ title: string; parent: JsonObject }>;
+        targets?: Array<{ title: string; parent?: JsonObject }>;
         operations?: PublishOperation["type"][];
         added_bytes: number;
         removed_bytes: number;
@@ -303,7 +303,7 @@ export class PublishDocumentService {
       status: "dry_run",
       plan: {
         operation: "create",
-        target: { title: input.target.title, parent },
+        target: { title: input.target.title, ...(parent ? { parent } : {}) },
         added_bytes: Buffer.byteLength(input.markdown, "utf8"),
         removed_bytes: 0,
       },
@@ -317,7 +317,10 @@ export class PublishDocumentService {
       status: "dry_run",
       plan: {
         operation: "create_batch",
-        targets: input.pages.map((page) => ({ title: page.title, parent })),
+        targets: input.pages.map((page) => ({
+          title: page.title,
+          ...(parent ? { parent } : {}),
+        })),
         added_bytes: payloadBytes(input),
         removed_bytes: 0,
       },
@@ -339,10 +342,11 @@ export class PublishDocumentService {
     context: OperationContext,
     wantsAsync: boolean,
   ): Promise<PublishDocumentResult> {
+    const parent = this.#parentArguments(input.target.parent);
     const createdResult = await this.#upstream.callTool(
       names.createPages,
       {
-        parent: this.#parentArguments(input.target.parent),
+        ...(parent ? { parent } : {}),
         pages: [{ properties: { title: input.target.title }, content: input.markdown }],
         ...(wantsAsync ? { allow_async: true } : {}),
       },
@@ -378,10 +382,11 @@ export class PublishDocumentService {
     context: OperationContext,
     wantsAsync: boolean,
   ): Promise<PublishDocumentResult> {
+    const parent = this.#parentArguments(input.target.parent);
     const createdResult = await this.#upstream.callTool(
       names.createPages,
       {
-        parent: this.#parentArguments(input.target.parent),
+        ...(parent ? { parent } : {}),
         pages: input.pages.map((page) => ({
           properties: { title: page.title },
           content: page.markdown,
@@ -1032,7 +1037,8 @@ export class PublishDocumentService {
     return references;
   }
 
-  #parentArguments(parent: CreateInput["target"]["parent"]): JsonObject {
+  #parentArguments(parent: CreateInput["target"]["parent"]): JsonObject | undefined {
+    if (!parent) return undefined;
     return parent.type === "page_id"
       ? { page_id: parent.page_id }
       : { data_source_id: parent.data_source_id.replace(/^collection:\/\//i, "") };

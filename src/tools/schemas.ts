@@ -109,7 +109,7 @@ const ParentSchema = z.union([
 const CreateTargetSchema = z
   .object({
     type: z.literal("create"),
-    parent: ParentSchema,
+    parent: ParentSchema.optional(),
     title: z.string().trim().min(1).max(200),
   })
   .strict();
@@ -124,7 +124,7 @@ const CreatePageSchema = z
 const BatchCreateTargetSchema = z
   .object({
     type: z.literal("create_batch"),
-    parent: ParentSchema,
+    parent: ParentSchema.optional(),
   })
   .strict();
 
