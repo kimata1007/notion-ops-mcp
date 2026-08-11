@@ -32,6 +32,10 @@ npm run build
 stdio テストは TypeScript を build し、`dist/cli.js` を子プロセスとして起動して stdout の各行が
 JSON-RPC であることまで確認する。
 
+CI はさらに `npm pack` の成果物を空の一時プロジェクトへ通常の依存解決でインストールし、生成された
+`node_modules/.bin/notion-ops-mcp` を起動する。これにより、ローカル `node_modules` の流用では隠れる
+依存宣言漏れ、bin不備、公開物のバージョン不一致、空Toolスキーマを検出する。
+
 主なテスト分類:
 
 - `test/domain`, `test/notion`: revision、編集計画、URL、上流結果の単体テスト
@@ -69,6 +73,14 @@ endpoint を変更する必要がある場合だけ `NOTION_MCP_URL` に HTTPS U
 
 ```bash
 npm pack --dry-run
+```
+
+実installを含む確認は、作成したtarballを渡して実行する。この処理は一時ディレクトリ内に専用npm cacheを
+作るため、Registryへ接続できる環境が必要である。
+
+```bash
+npm pack --json --ignore-scripts
+npm run smoke:package -- notion-ops-mcp-<version>.tgz
 ```
 
 `dist/cli.js`、型定義、README、LICENSE、docs だけが必要な内容とともに含まれることを確認する。npm 公開や

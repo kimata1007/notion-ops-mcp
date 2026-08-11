@@ -28,3 +28,9 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Smoke-test an isolated package install
+        shell: bash
+        run: |
+          npm pack --json --ignore-scripts > npm-pack.json
+          package_file="$(jq -r '.[0].filename' npm-pack.json)"
+          npm run smoke:package -- "$package_file"
