@@ -208,6 +208,13 @@ npm test
 npm run build
 ```
 
+## リリース
+
+`main` への変更は Release Please が Release PR にまとめます。そのPRをマージすると、
+GitHub Releaseの作成、npm Trusted Publishingによる公開、`.tgz`とSHA-256チェックサムの
+Releaseへの添付までGitHub Actionsが実行します。初回設定と復旧手順は
+[`docs/releasing.md`](docs/releasing.md)を参照してください。
+
 テストは実資格情報を使わず、同じ MCP プロトコル境界を通る in-memory fake Notion MCP と実 stdio 子プロセスで実行します。詳しくは [開発手順](docs/development.md) を参照してください。
 
 ## 設計資料
