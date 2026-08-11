@@ -1,2 +1,4 @@
-export const PACKAGE_NAME = "notion-ops-mcp";
-export const PACKAGE_VERSION = "0.2.1";
+import packageMetadata from "../package.json" with { type: "json" };
+
+export const PACKAGE_NAME = packageMetadata.name;
+export const PACKAGE_VERSION = packageMetadata.version;
