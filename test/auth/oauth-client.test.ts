@@ -30,7 +30,7 @@ describe("NotionOAuthClient", () => {
     const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = input.toString();
       requests.push({ url, ...(init ? { init } : {}) });
-      if (url.endsWith("/mcp/.well-known/oauth-protected-resource")) {
+      if (url === "https://mcp.notion.com/.well-known/oauth-protected-resource") {
         return json({ authorization_servers: ["https://auth.test"] });
       }
       if (url.endsWith("/.well-known/oauth-authorization-server")) return json(oauthMetadata);
@@ -49,7 +49,7 @@ describe("NotionOAuthClient", () => {
 
     expect(registration.client_id).toBe("registered");
     expect(requests.map((request) => request.url)).toEqual([
-      "https://mcp.notion.com/mcp/.well-known/oauth-protected-resource",
+      "https://mcp.notion.com/.well-known/oauth-protected-resource",
       "https://auth.test/.well-known/oauth-authorization-server",
       "https://auth.test/register",
     ]);

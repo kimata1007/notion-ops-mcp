@@ -75,22 +75,16 @@ export class NotionOAuthClient {
 
   async discover(resourceEndpoint: URL, signal: AbortSignal): Promise<OAuthMetadata> {
     assertSecureUrl(resourceEndpoint.toString(), true);
-    const resourcePaths = [
-      `${resourceEndpoint.pathname.replace(/\/$/u, "")}/.well-known/oauth-protected-resource`,
-      "/.well-known/oauth-protected-resource",
-    ];
-    let protectedResource: Record<string, unknown> | undefined;
-    for (const path of [...new Set(resourcePaths)]) {
-      const response = await this.#fetch(new URL(path, resourceEndpoint.origin), {
-        headers: { Accept: "application/json" },
-        signal,
-      });
-      if (response.ok) {
-        protectedResource = (await parseJson(response)) as Record<string, unknown>;
-        break;
-      }
-      if (response.status !== 404) throw await oauthError(response);
-    }
+    const protectedResourceUrl = new URL("/.well-known/oauth-protected-resource", resourceEndpoint);
+    const protectedResourceResponse = await this.#fetch(protectedResourceUrl, {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    if (!protectedResourceResponse.ok) throw await oauthError(protectedResourceResponse);
+    const protectedResource = (await parseJson(protectedResourceResponse)) as Record<
+      string,
+      unknown
+    >;
     const authorizationServers = protectedResource?.["authorization_servers"];
     const authorizationServer = Array.isArray(authorizationServers)
       ? authorizationServers[0]

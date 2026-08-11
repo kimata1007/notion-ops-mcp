@@ -142,7 +142,7 @@ describe("AuthManager", () => {
     const loopback = new MemoryLoopback();
     const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = input.toString();
-      if (url.endsWith("/mcp/.well-known/oauth-protected-resource")) {
+      if (url === "https://mcp.notion.com/.well-known/oauth-protected-resource") {
         return json({ authorization_servers: ["https://auth.test"] });
       }
       if (url.endsWith("/.well-known/oauth-authorization-server")) return json(oauthMetadata);
@@ -202,7 +202,7 @@ describe("AuthManager", () => {
         refreshCalls += 1;
         return json({ error: "invalid_grant" }, 400);
       }
-      if (url.endsWith("/mcp/.well-known/oauth-protected-resource")) {
+      if (url === "https://mcp.notion.com/.well-known/oauth-protected-resource") {
         return json({ authorization_servers: ["https://auth.test"] });
       }
       if (url.endsWith("/.well-known/oauth-authorization-server")) return json(oauthMetadata);

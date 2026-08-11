@@ -17,13 +17,17 @@ stdout、Tool 結果へ含めない。
 
 ```text
 unauthenticated
-  -> discover (RFC 9470 -> RFC 8414)
+  -> discover (RFC 9470 root metadata -> RFC 8414)
   -> dynamic client registration (RFC 7591)
   -> pending(state + PKCE + loopback callback, 10 minute expiry)
   -> authenticated
   -> refreshing
   -> authenticated | reauth_required
 ```
+
+Protected Resource Metadata は、MCP endpoint の path 配下ではなく origin 直下の
+`/.well-known/oauth-protected-resource` から取得する。Notionは誤った
+`/mcp/.well-known/oauth-protected-resource` に404ではなく401を返すため、path配下を先に試さない。
 
 初回 Tool Call は loopback の空き port に callback server を短時間だけ bind する。認証 URL を構造化結果
 として返して Tool Call 自体は終了するため、stdio サーバーをブロックしない。callback は `127.0.0.1`
