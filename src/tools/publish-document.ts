@@ -26,6 +26,7 @@ import {
   type SearchCandidate,
 } from "../notion/normalize.js";
 import { pageIdFromUrl } from "../notion/url.js";
+import { notionCreateContentEquivalent } from "../notion/markdown.js";
 import { OperationContext } from "../upstream/context.js";
 import type { McpUpstreamClient } from "../upstream/mcp-client.js";
 import type { JsonObject, UpstreamToolNames } from "../upstream/types.js";
@@ -365,7 +366,7 @@ export class PublishDocumentService {
     if (
       page.upstreamTruncated ||
       page.title !== input.target.title ||
-      page.markdown !== input.markdown
+      !notionCreateContentEquivalent(page.markdown, input.markdown)
     ) {
       return {
         status: "conflict",
@@ -415,7 +416,7 @@ export class PublishDocumentService {
         if (
           page.upstreamTruncated ||
           page.title !== requested.title ||
-          page.markdown !== requested.markdown
+          !notionCreateContentEquivalent(page.markdown, requested.markdown)
         ) {
           return {
             status: "verification_failed" as const,

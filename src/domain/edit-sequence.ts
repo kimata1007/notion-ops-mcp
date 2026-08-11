@@ -5,6 +5,7 @@ import {
   type ConflictReason,
   type EditPlan,
 } from "./edit.js";
+import { canonicalizeNotionMarkdown, notionMarkdownEquivalent } from "../notion/markdown.js";
 import type { PublishOperation } from "../tools/schemas.js";
 import type { JsonObject } from "../upstream/types.js";
 
@@ -134,7 +135,7 @@ export function verifyEditSequence(
   after: string,
   plan: Extract<EditSequencePlan, { state: "ready" }>,
 ): boolean {
-  if (after === plan.expectedMarkdown) return true;
+  if (notionMarkdownEquivalent(after, plan.expectedMarkdown)) return true;
   const readySteps = plan.steps.filter(
     (step): step is EditSequenceStep & { plan: Extract<EditPlan, { state: "ready" }> } =>
       step.plan.state === "ready",
@@ -144,9 +145,16 @@ export function verifyEditSequence(
       (step) => step.plan.oldFragment !== undefined && step.plan.newFragment !== undefined,
     )
   ) {
-    let reverted = after;
+    let reverted = canonicalizeNotionMarkdown(after);
     for (const step of [...readySteps].reverse()) {
-      const { oldFragment, newFragment } = step.plan;
+      const oldFragment =
+        step.plan.oldFragment === undefined
+          ? undefined
+          : canonicalizeNotionMarkdown(step.plan.oldFragment);
+      const newFragment =
+        step.plan.newFragment === undefined
+          ? undefined
+          : canonicalizeNotionMarkdown(step.plan.newFragment);
       if (
         oldFragment === undefined ||
         newFragment === undefined ||
@@ -156,12 +164,13 @@ export function verifyEditSequence(
       }
       reverted = reverted.replace(newFragment, oldFragment);
     }
+    const canonicalBefore = canonicalizeNotionMarkdown(before);
     let cursor = 0;
     for (const character of reverted) {
-      if (character === before[cursor]) cursor += 1;
-      if (cursor === before.length) return true;
+      if (character === canonicalBefore[cursor]) cursor += 1;
+      if (cursor === canonicalBefore.length) return true;
     }
-    return before.length === 0;
+    return canonicalBefore.length === 0;
   }
   return plan.steps.every((step) =>
     step.plan.state === "ready"
