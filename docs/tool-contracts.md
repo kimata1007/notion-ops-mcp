@@ -33,7 +33,7 @@ ID/URL は検索せず取得する。検索は候補がちょうど一件の場�
 - 新規: `title` と任意の `parent`（page/data source）。`parent` を省略するとプライベートページとして作成
 - 複数新規: `type: "create_batch"`、任意の共通 `parent`、1〜8件の `pages[{ title, markdown }]`
 
-検索候補が一件でなければ書き込まない。既存ページに対する `operation` は次の union である。
+検索候補内のタイトル完全一致が一意ならそのページを選ぶ。それ以外で候補が一件でなければ書き込まない。既存ページに対する `operation` は次の union である。
 
 - `append` / `prepend`: `markdown`
 - `insert_after` / `insert_before`: `anchor` と `markdown`

@@ -22,6 +22,7 @@ import { isOpsError, OpsError } from "../errors.js";
 import {
   normalizeFetchResult,
   normalizeSearchResult,
+  preferExactTitleMatches,
   type PageSnapshot,
   type SearchCandidate,
 } from "../notion/normalize.js";
@@ -901,7 +902,10 @@ export class PublishDocumentService {
         "read",
         context,
       );
-      const candidates = normalizeSearchResult(searched.value, 10);
+      const candidates = preferExactTitleMatches(
+        normalizeSearchResult(searched.value, 10),
+        input.target.query,
+      );
       if (candidates.length === 0) return { state: "not_found" };
       if (candidates.length > 1) return { state: "ambiguous", candidates };
       const candidate = candidates[0];

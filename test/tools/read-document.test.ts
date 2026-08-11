@@ -77,6 +77,18 @@ describe("notion_read_document", () => {
     if (result.status === "success") expect(result.page.id).toBe(page.id);
   });
 
+  it("prefers one exact title over additional fuzzy search candidates", async () => {
+    const fake = new FakeNotionMcp();
+    const exact = fake.addPage({ title: "Release plan", markdown: "Current" });
+    fake.addPage({ title: "Release plan archive", markdown: "Archived" });
+
+    const result = await service(fake).execute({ source: { query: "Release plan" } });
+
+    expect(result.status).toBe("success");
+    if (result.status === "success") expect(result.page.id).toBe(exact.id);
+    expect(fake.calls.map((call) => call.name)).toEqual(["notion-search", "notion-fetch"]);
+  });
+
   it("does not fetch or guess when search is ambiguous", async () => {
     const fake = new FakeNotionMcp();
     fake.addPage({ title: "Weekly notes A", markdown: "A" });

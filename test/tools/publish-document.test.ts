@@ -268,6 +268,27 @@ describe("notion_publish_document", () => {
     expect(fake.calls.map((call) => call.name)).toEqual(["notion-search"]);
   });
 
+  it("updates one exact title without guessing among fuzzy search candidates", async () => {
+    const fake = new FakeNotionMcp();
+    const exact = fake.addPage({ title: "Release plan", markdown: "Current" });
+    fake.addPage({ title: "Release plan archive", markdown: "Archived" });
+    const { publish } = services(fake);
+
+    const result = await publish.execute({
+      target: { query: "Release plan" },
+      operation: { type: "append", markdown: "Approved" },
+    });
+
+    expect(result).toMatchObject({ status: "success", verification: "verified" });
+    expect(fake.pages.get(exact.id)?.markdown).toContain("Approved");
+    expect(fake.calls.map((call) => call.name)).toEqual([
+      "notion-search",
+      "notion-fetch",
+      "notion-update-page",
+      "notion-fetch",
+    ]);
+  });
+
   it("reports already_applied and does not duplicate an append", async () => {
     const fake = new FakeNotionMcp();
     const page = fake.addPage({ title: "Doc", markdown: "body\n\nrequested" });

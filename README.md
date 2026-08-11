@@ -62,7 +62,7 @@ OAuth 資格情報は所有者だけが読めるファイルへ原子的に保�
 
 ### `notion_read_document`
 
-ページ ID、Notion URL、検索条件のいずれか一つで対象を解決し、Markdown、最小限のメタデータ、後続更新用 revision を返します。ID/URL 指定時は検索しません。検索結果が0件なら `not_found`、複数なら本文を取得せず `ambiguous` と候補一覧を返します。
+ページ ID、Notion URL、検索条件のいずれか一つで対象を解決し、Markdown、最小限のメタデータ、後続更新用 revision を返します。ID/URL 指定時は検索しません。検索結果が0件なら `not_found`、タイトル完全一致が一意ならその候補を取得し、それ以外の複数候補は本文を取得せず `ambiguous` と候補一覧を返します。
 
 ```json
 {
