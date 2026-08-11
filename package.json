@@ -38,6 +38,9 @@
     "type": "git",
     "url": "git+https://github.com/kimata1007/notion-ops-mcp.git"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "4.1.12"
